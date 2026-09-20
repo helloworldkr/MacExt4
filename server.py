@@ -310,6 +310,33 @@ def api_search(q: str = Query(..., description="Search query"), path: str = Quer
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/grep")
+def api_grep(
+    q: str = Query(..., description="Search query string to find inside files"),
+    path: str = Query("/", description="Root search path"),
+    recursive: bool = Query(False, description="Recursive directory scan"),
+    case_sensitive: bool = Query(False, description="Case-sensitive match")
+):
+    """Search inside text files for a query string (grep)."""
+    try:
+        fs = get_current_fs()
+        results = fs.grep_content(
+            query=q,
+            root_path=path,
+            recursive=recursive,
+            case_sensitive=case_sensitive
+        )
+        return {
+            "query": q,
+            "root_path": path,
+            "recursive": recursive,
+            "count": len(results),
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/create-sample")
 def api_create_sample():
     """Generate sample Linux SSD image."""

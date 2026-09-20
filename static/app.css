@@ -812,6 +812,172 @@ body {
   color: var(--text-primary);
 }
 
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.in-file-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: #182030;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 4px 8px;
+  width: 320px;
+  transition: all 0.2s ease;
+  color: var(--text-secondary);
+}
+
+.in-file-search-bar:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+  background: #1c263c;
+}
+
+.in-file-search-bar input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #f8fafc;
+  font-size: 12px;
+  font-family: inherit;
+  flex: 1;
+  min-width: 80px;
+}
+
+.in-file-count {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: #94a3b8;
+  padding: 0 4px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.btn-in-file-nav {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 10px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.btn-in-file-nav:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+}
+
+.btn-in-file-toggle {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+
+.btn-in-file-toggle:hover {
+  color: #f8fafc;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.btn-in-file-toggle.active {
+  background: var(--accent-blue);
+  color: #0f172a;
+  border-color: var(--accent-blue);
+}
+
+/* In-File Search Highlight Markers */
+mark.search-highlight {
+  background: rgba(234, 179, 8, 0.4);
+  color: #fef08a;
+  border-radius: 2px;
+  padding: 0 1px;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+mark.search-highlight.active {
+  background: #f59e0b;
+  color: #000;
+  font-weight: 700;
+  outline: 2px solid #fbbf24;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.9);
+}
+
+/* Grep Content Search Table Results */
+.grep-match-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-left: 8px;
+}
+
+.grep-snippets-box {
+  margin-top: 6px;
+  margin-bottom: 4px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.grep-snippet-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.grep-snippet-item:hover {
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.grep-snippet-num {
+  color: #a78bfa;
+  font-weight: 600;
+  min-width: 42px;
+}
+
+.grep-snippet-text {
+  color: #cbd5e1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grep-snippet-text mark {
+  background: rgba(234, 179, 8, 0.45);
+  color: #fef08a;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
 .hidden {
   display: none !important;
 }

@@ -598,3 +598,121 @@ class LinuxFileSystem:
 
         scan_dir(root_path)
         return results
+
+    def grep_content(
+        self,
+        query: str,
+        root_path: str = "/",
+        recursive: bool = False,
+        case_sensitive: bool = False,
+        max_file_size: int = 5 * 1024 * 1024,
+        max_results: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Search inside text files for a query string."""
+        results = []
+        if not query:
+            return results
+
+        target = query if case_sensitive else query.lower()
+
+        # Common non-text extensions to skip for performance
+        binary_exts = {
+            ".bin", ".iso", ".img", ".dmg", ".tar", ".gz", ".zip", ".xz", ".bz2", ".7z",
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tiff",
+            ".mp4", ".mkv", ".mov", ".avi", ".webm", ".mp3", ".wav", ".flac", ".ogg",
+            ".pdf", ".exe", ".dylib", ".so", ".o", ".a", ".pyc"
+        }
+
+        def check_file(entry: Dict[str, Any]):
+            if len(results) >= max_results:
+                return
+
+            file_path = entry["path"]
+            file_name = entry["name"]
+            size = entry.get("size", 0)
+
+            # Skip huge files and known binaries
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext in binary_exts or size > max_file_size:
+                return
+
+            try:
+                # Read up to 2MB of file content
+                chunk = self.read_file(file_path, limit=min(size, 2 * 1024 * 1024))
+                if not chunk:
+                    return
+
+                # Quick binary byte check
+                if b"\x00" in chunk[:1024]:
+                    return
+
+                # Decode to string
+                try:
+                    text = chunk.decode("utf-8")
+                except UnicodeDecodeError:
+                    try:
+                        text = chunk.decode("latin-1")
+                    except Exception:
+                        return
+
+                lines = text.splitlines()
+                matching_lines = []
+                for line_idx, line in enumerate(lines, 1):
+                    compare_line = line if case_sensitive else line.lower()
+                    if target in compare_line:
+                        snippet = line.strip()
+                        if len(snippet) > 160:
+                            idx = compare_line.find(target)
+                            start = max(0, idx - 40)
+                            end = min(len(snippet), idx + len(target) + 80)
+                            snippet = ("..." if start > 0 else "") + snippet[start:end] + ("..." if end < len(snippet) else "")
+                        matching_lines.append({
+                            "line": line_idx,
+                            "snippet": snippet
+                        })
+                        if len(matching_lines) >= 5:
+                            break
+
+                if matching_lines:
+                    results.append({
+                        "name": file_name,
+                        "path": file_path,
+                        "type": "file",
+                        "size": size,
+                        "size_human": format_bytes(size),
+                        "mode": entry.get("mode", "-rw-r--r--"),
+                        "uid": entry.get("uid", 0),
+                        "gid": entry.get("gid", 0),
+                        "inode": entry.get("inode", 0),
+                        "mtime": entry.get("mtime"),
+                        "match_count": len(matching_lines),
+                        "matches": matching_lines
+                    })
+            except Exception:
+                pass
+
+        def scan_dir(dir_path: str):
+            if len(results) >= max_results:
+                return
+            try:
+                entries = self.listdir(dir_path)
+                # First check files in this directory
+                for entry in entries:
+                    if entry["type"] == "file":
+                        check_file(entry)
+                        if len(results) >= max_results:
+                            return
+
+                # Recurse if requested
+                if recursive:
+                    for entry in entries:
+                        if entry["type"] == "directory":
+                            if entry["name"] not in ("proc", "sys", "dev", "lost+found"):
+                                scan_dir(entry["path"])
+                                if len(results) >= max_results:
+                                    return
+            except Exception:
+                pass
+
+        scan_dir(root_path)
+        return results

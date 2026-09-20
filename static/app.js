@@ -37,6 +37,7 @@ const breadcrumbBar = document.getElementById("breadcrumbBar");
 const searchInput = document.getElementById("searchInput");
 const btnClearSearch = document.getElementById("btnClearSearch");
 const chkDeepSearch = document.getElementById("chkDeepSearch");
+const chkContentSearch = document.getElementById("chkContentSearch");
 const btnDownloadFolderZip = document.getElementById("btnDownloadFolderZip");
 
 const fileTable = document.getElementById("fileTable");
@@ -53,6 +54,19 @@ const imagePreview = document.getElementById("imagePreview");
 const metaGrid = document.getElementById("metaGrid");
 const btnCopyContent = document.getElementById("btnCopyContent");
 const textEncodingInfo = document.getElementById("textEncodingInfo");
+
+const inFileSearchBar = document.getElementById("inFileSearchBar");
+const inFileSearchInput = document.getElementById("inFileSearchInput");
+const inFileMatchCount = document.getElementById("inFileMatchCount");
+const btnInFilePrev = document.getElementById("btnInFilePrev");
+const btnInFileNext = document.getElementById("btnInFileNext");
+const btnInFileCase = document.getElementById("btnInFileCase");
+const btnInFileClear = document.getElementById("btnInFileClear");
+
+let rawFileContent = "";
+let inFileMatches = [];
+let activeInFileMatchIndex = -1;
+let inFileCaseSensitive = false;
 
 // Icons SVG helper
 function getFileIcon(type, name) {
@@ -218,6 +232,17 @@ function setupEventListeners() {
 
   chkDeepSearch.addEventListener("change", onSearchInput);
 
+  if (chkContentSearch) {
+    chkContentSearch.addEventListener("change", () => {
+      if (chkContentSearch.checked) {
+        searchInput.placeholder = "Search inside file text contents (grep)...";
+      } else {
+        searchInput.placeholder = "Filter or search files...";
+      }
+      onSearchInput();
+    });
+  }
+
   btnDownloadFolderZip.addEventListener("click", () => {
     window.location.href = `/api/download-zip?path=${encodeURIComponent(currentPath)}`;
   });
@@ -235,9 +260,66 @@ function setupEventListeners() {
   });
 
   btnCopyContent.addEventListener("click", () => {
-    navigator.clipboard.writeText(codeView.innerText);
+    navigator.clipboard.writeText(rawFileContent || codeView.innerText);
     btnCopyContent.innerText = "Copied!";
     setTimeout(() => btnCopyContent.innerText = "Copy Text", 2000);
+  });
+
+  // In-File Search Bar Events
+  if (inFileSearchInput) {
+    inFileSearchInput.addEventListener("input", () => {
+      activeInFileMatchIndex = 0;
+      performInFileSearch(true);
+    });
+    inFileSearchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        navigateInFileMatch(e.shiftKey ? "prev" : "next");
+      } else if (e.key === "Escape") {
+        inFileSearchInput.value = "";
+        performInFileSearch(false);
+        inFileSearchInput.blur();
+      }
+    });
+  }
+
+  if (btnInFilePrev) {
+    btnInFilePrev.addEventListener("click", () => navigateInFileMatch("prev"));
+  }
+  if (btnInFileNext) {
+    btnInFileNext.addEventListener("click", () => navigateInFileMatch("next"));
+  }
+  if (btnInFileCase) {
+    btnInFileCase.addEventListener("click", () => {
+      inFileCaseSensitive = !inFileCaseSensitive;
+      btnInFileCase.classList.toggle("active", inFileCaseSensitive);
+      performInFileSearch(true);
+    });
+  }
+  if (btnInFileClear) {
+    btnInFileClear.addEventListener("click", () => {
+      inFileSearchInput.value = "";
+      performInFileSearch(false);
+    });
+  }
+
+  // Keyboard shortcut: Cmd+F or Ctrl+F to trigger find inside file
+  window.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+      if (!previewModal.classList.contains("hidden")) {
+        e.preventDefault();
+        const tabBtn = document.getElementById("tabBtnText");
+        if (tabBtn) tabBtn.click();
+        if (inFileSearchInput) {
+          inFileSearchInput.focus();
+          inFileSearchInput.select();
+        }
+      }
+    } else if (e.key === "Escape") {
+      if (!previewModal.classList.contains("hidden")) {
+        closeModal();
+      }
+    }
   });
 
   // Modal Tabs
@@ -644,8 +726,24 @@ async function onSearchInput() {
     return;
   }
 
+  // Inside Files (Grep) Search
+  if (chkContentSearch && chkContentSearch.checked) {
+    fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7">Searching inside file contents for "${escapeHtml(query)}"...</td></tr>`;
+    try {
+      const isRecursive = chkDeepSearch ? chkDeepSearch.checked : false;
+      const res = await fetch(`/api/grep?q=${encodeURIComponent(query)}&path=${encodeURIComponent(currentPath)}&recursive=${isRecursive}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Search failed");
+      renderGrepResults(data.results || [], query);
+    } catch (e) {
+      fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7" style="color: #ef4444;">Grep search failed: ${e.message}</td></tr>`;
+    }
+    return;
+  }
+
+  // Filename Deep Search
   if (chkDeepSearch.checked) {
-    fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7">Searching recursively for "${query}"...</td></tr>`;
+    fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7">Searching recursively for "${escapeHtml(query)}"...</td></tr>`;
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(currentPath)}`);
       const data = await res.json();
@@ -658,8 +756,215 @@ async function onSearchInput() {
   }
 }
 
+// Render Grep Content Search Results
+function renderGrepResults(results, query) {
+  if (!results || results.length === 0) {
+    fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7">No matching files containing "${escapeHtml(query)}" found.</td></tr>`;
+    return;
+  }
+
+  fileTableBody.innerHTML = "";
+  results.forEach(item => {
+    const tr = document.createElement("tr");
+    tr.className = "file-row";
+
+    const nameCell = document.createElement("td");
+    nameCell.className = "file-name-cell";
+
+    let snippetsHtml = "";
+    if (item.matches && item.matches.length > 0) {
+      snippetsHtml = `
+        <div class="grep-snippets-box">
+          ${item.matches.map(m => {
+            const escaped = escapeHtml(m.snippet);
+            const escapedQ = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const highlighted = escaped.replace(new RegExp(escapedQ, "gi"), match => `<mark>${match}</mark>`);
+            return `<div class="grep-snippet-item" data-path="${escapeHtml(item.path)}" data-query="${escapeHtml(query)}">
+              <span class="grep-snippet-num">L${m.line}:</span>
+              <span class="grep-snippet-text">${highlighted}</span>
+            </div>`;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    nameCell.innerHTML = `
+      <div>
+        <div style="display: flex; align-items: center;">
+          ${getFileIcon(item.type, item.name)}
+          <span style="font-weight: 500;">${escapeHtml(item.name)}</span>
+          <span class="grep-match-badge">${item.match_count} match${item.match_count > 1 ? 'es' : ''}</span>
+        </div>
+        ${snippetsHtml}
+      </div>
+    `;
+
+    const sizeCell = document.createElement("td");
+    sizeCell.className = "col-size";
+    sizeCell.textContent = item.size_human;
+
+    const modeCell = document.createElement("td");
+    modeCell.className = "col-mode";
+    modeCell.textContent = item.mode || "-rw-r--r--";
+
+    const ownerCell = document.createElement("td");
+    ownerCell.className = "col-owner";
+    ownerCell.textContent = `${item.uid}:${item.gid}`;
+
+    const inodeCell = document.createElement("td");
+    inodeCell.className = "col-inode";
+    inodeCell.textContent = item.inode || "—";
+
+    const mtimeCell = document.createElement("td");
+    mtimeCell.className = "col-mtime";
+    mtimeCell.textContent = item.mtime || "—";
+
+    const actionsCell = document.createElement("td");
+    actionsCell.className = "col-actions";
+    const actGroup = document.createElement("div");
+    actGroup.className = "action-btns";
+
+    const btnPrev = document.createElement("button");
+    btnPrev.className = "btn-tbl-action";
+    btnPrev.title = "Preview";
+    btnPrev.textContent = "View";
+    btnPrev.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPreview(item.path, query);
+    });
+    actGroup.appendChild(btnPrev);
+
+    const btnDl = document.createElement("button");
+    btnDl.className = "btn-tbl-action";
+    btnDl.title = "Download";
+    btnDl.textContent = "Get";
+    btnDl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      window.location.href = `/api/download?path=${encodeURIComponent(item.path)}`;
+    });
+    actGroup.appendChild(btnDl);
+
+    actionsCell.appendChild(actGroup);
+
+    tr.appendChild(nameCell);
+    tr.appendChild(sizeCell);
+    tr.appendChild(modeCell);
+    tr.appendChild(ownerCell);
+    tr.appendChild(inodeCell);
+    tr.appendChild(mtimeCell);
+    tr.appendChild(actionsCell);
+
+    // Row click
+    tr.addEventListener("click", () => {
+      openPreview(item.path, query);
+    });
+
+    fileTableBody.appendChild(tr);
+  });
+}
+
+// In-File Search Engine
+function performInFileSearch(autoScroll = true) {
+  if (!inFileSearchInput) return;
+  const query = inFileSearchInput.value;
+  if (btnInFileClear) btnInFileClear.classList.toggle("hidden", !query);
+
+  if (!query || !rawFileContent) {
+    if (codeView && codeView.querySelector("code")) {
+      codeView.querySelector("code").textContent = rawFileContent;
+    }
+    inFileMatches = [];
+    activeInFileMatchIndex = -1;
+    if (inFileMatchCount) inFileMatchCount.textContent = "0/0";
+    return;
+  }
+
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const flags = inFileCaseSensitive ? "g" : "gi";
+  let regex;
+  try {
+    regex = new RegExp(escaped, flags);
+  } catch (e) {
+    return;
+  }
+
+  const matches = [];
+  let m;
+  while ((m = regex.exec(rawFileContent)) !== null) {
+    matches.push({ start: m.index, end: m.index + m[0].length });
+    if (matches.length >= 2500) break;
+  }
+
+  inFileMatches = matches;
+
+  if (matches.length === 0) {
+    if (codeView && codeView.querySelector("code")) {
+      codeView.querySelector("code").textContent = rawFileContent;
+    }
+    activeInFileMatchIndex = -1;
+    if (inFileMatchCount) inFileMatchCount.textContent = "0/0";
+    return;
+  }
+
+  if (activeInFileMatchIndex < 0 || activeInFileMatchIndex >= matches.length) {
+    activeInFileMatchIndex = 0;
+  }
+
+  if (inFileMatchCount) {
+    inFileMatchCount.textContent = `${activeInFileMatchIndex + 1}/${matches.length}`;
+  }
+
+  let html = "";
+  let lastPos = 0;
+  for (let i = 0; i < matches.length; i++) {
+    const matchObj = matches[i];
+    html += escapeHtml(rawFileContent.slice(lastPos, matchObj.start));
+    const activeClass = i === activeInFileMatchIndex ? " active" : "";
+    const matchedText = escapeHtml(rawFileContent.slice(matchObj.start, matchObj.end));
+    html += `<mark class="search-highlight${activeClass}" data-match-idx="${i}">${matchedText}</mark>`;
+    lastPos = matchObj.end;
+  }
+  html += escapeHtml(rawFileContent.slice(lastPos));
+
+  if (codeView && codeView.querySelector("code")) {
+    codeView.querySelector("code").innerHTML = html;
+  }
+
+  if (autoScroll) {
+    scrollToActiveMatch();
+  }
+}
+
+function scrollToActiveMatch() {
+  if (!codeView) return;
+  const activeEl = codeView.querySelector("mark.search-highlight.active");
+  if (activeEl) {
+    activeEl.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+function navigateInFileMatch(direction) {
+  if (inFileMatches.length === 0) return;
+  if (direction === "next") {
+    activeInFileMatchIndex = (activeInFileMatchIndex + 1) % inFileMatches.length;
+  } else {
+    activeInFileMatchIndex = (activeInFileMatchIndex - 1 + inFileMatches.length) % inFileMatches.length;
+  }
+
+  const marks = codeView.querySelectorAll("mark.search-highlight");
+  marks.forEach((el, idx) => {
+    el.classList.toggle("active", idx === activeInFileMatchIndex);
+  });
+
+  if (inFileMatchCount) {
+    inFileMatchCount.textContent = `${activeInFileMatchIndex + 1}/${inFileMatches.length}`;
+  }
+
+  scrollToActiveMatch();
+}
+
 // Preview Modal
-async function openPreview(path) {
+async function openPreview(path, initialSearch = "") {
   currentPreviewPath = path;
   modalFileName.textContent = path.split("/").pop();
   modalFilePath.textContent = path;
@@ -673,14 +978,28 @@ async function openPreview(path) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Failed to preview file");
 
+    rawFileContent = data.content_text || "";
+
     // Populate Text Tab
     if (data.content_text !== null) {
-      codeView.querySelector("code").textContent = data.content_text;
       textEncodingInfo.textContent = `${data.mime_type} • ${data.size_human}${data.is_truncated ? " (Truncated preview)" : ""}`;
       document.getElementById("tabBtnText").click();
+
+      if (initialSearch) {
+        if (inFileSearchInput) inFileSearchInput.value = initialSearch;
+        activeInFileMatchIndex = 0;
+        performInFileSearch(true);
+      } else if (inFileSearchInput && inFileSearchInput.value) {
+        performInFileSearch(true);
+      } else {
+        codeView.querySelector("code").textContent = rawFileContent;
+        if (inFileMatchCount) inFileMatchCount.textContent = "0/0";
+      }
     } else {
+      rawFileContent = "";
       codeView.querySelector("code").textContent = "[Binary File - View in Hex Viewer]";
       document.getElementById("tabBtnHex").click();
+      if (inFileMatchCount) inFileMatchCount.textContent = "0/0";
     }
 
     // Populate Image Tab
@@ -723,6 +1042,11 @@ async function openPreview(path) {
 function closeModal() {
   previewModal.classList.add("hidden");
   currentPreviewPath = null;
+  rawFileContent = "";
+  inFileMatches = [];
+  activeInFileMatchIndex = -1;
+  if (inFileSearchInput) inFileSearchInput.value = "";
+  if (inFileMatchCount) inFileMatchCount.textContent = "0/0";
 }
 
 function escapeHtml(text) {

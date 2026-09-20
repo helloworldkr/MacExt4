@@ -171,9 +171,14 @@
             <button id="btnClearSearch" class="btn-clear hidden">&times;</button>
           </div>
 
+          <label class="toggle-label" title="Search inside file text contents (grep)">
+            <input type="checkbox" id="chkContentSearch" />
+            <span style="font-weight: 500; color: #38bdf8;">Inside Files (Grep)</span>
+          </label>
+
           <label class="toggle-label" title="Search all nested folders recursively">
             <input type="checkbox" id="chkDeepSearch" />
-            <span>Deep Search</span>
+            <span>Recursive</span>
           </label>
 
           <button id="btnDownloadFolderZip" class="btn btn-secondary" title="Download current directory as a ZIP archive">
@@ -252,8 +257,27 @@
           <!-- Text Tab -->
           <div class="tab-pane active" id="tabText">
             <div class="code-toolbar">
-              <span id="textEncodingInfo">UTF-8 Text</span>
-              <button class="btn btn-sm btn-outline" id="btnCopyContent">Copy Text</button>
+              <div class="toolbar-left">
+                <span id="textEncodingInfo">UTF-8 Text</span>
+              </div>
+
+              <!-- In-File Search Bar -->
+              <div class="in-file-search-bar" id="inFileSearchBar">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="inFileSearchInput" placeholder="Find in file (⌘F)..." autocomplete="off" spellcheck="false" />
+                <span id="inFileMatchCount" class="in-file-count">0/0</span>
+                <button id="btnInFilePrev" class="btn-in-file-nav" title="Previous match (Shift+Enter)">▲</button>
+                <button id="btnInFileNext" class="btn-in-file-nav" title="Next match (Enter)">▼</button>
+                <button id="btnInFileCase" class="btn-in-file-toggle" title="Match Case">Aa</button>
+                <button id="btnInFileClear" class="btn-clear hidden" style="font-size: 14px; padding: 0 4px;">&times;</button>
+              </div>
+
+              <div class="toolbar-right">
+                <button class="btn btn-sm btn-outline" id="btnCopyContent">Copy Text</button>
+              </div>
             </div>
             <pre class="code-view" id="codeView"><code></code></pre>
           </div>
