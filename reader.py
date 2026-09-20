@@ -716,3 +716,229 @@ class LinuxFileSystem:
 
         scan_dir(root_path)
         return results
+
+    def grep_content_stream(
+        self,
+        query: str,
+        root_path: str = "/",
+        recursive: bool = False,
+        case_sensitive: bool = False,
+        max_file_size: int = 5 * 1024 * 1024,
+        max_results: int = 250
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Stream search progress and matches as a generator."""
+        if not query:
+            yield {"type": "done", "scanned": 0, "total": 0, "matches_count": 0, "elapsed": 0.0, "speed": 0}
+            return
+
+        target = query if case_sensitive else query.lower()
+        t0 = time.time()
+
+        binary_exts = {
+            ".bin", ".iso", ".img", ".dmg", ".tar", ".gz", ".zip", ".xz", ".bz2", ".7z",
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tiff",
+            ".mp4", ".mkv", ".mov", ".avi", ".webm", ".mp3", ".wav", ".flac", ".ogg",
+            ".pdf", ".exe", ".dylib", ".so", ".o", ".a", ".pyc"
+        }
+
+        total_files = None
+        if not recursive:
+            try:
+                entries = self.listdir(root_path)
+                total_files = len([e for e in entries if e.get("type") == "file"])
+            except Exception:
+                total_files = None
+
+        yield {
+            "type": "start",
+            "query": query,
+            "root_path": root_path,
+            "recursive": recursive,
+            "total": total_files
+        }
+
+        scanned = 0
+        matches_count = 0
+        last_yield_time = t0
+
+        def check_file(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            file_path = entry["path"]
+            file_name = entry["name"]
+            size = entry.get("size", 0)
+
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext in binary_exts or size > max_file_size:
+                return None
+
+            try:
+                chunk = self.read_file(file_path, limit=min(size, 2 * 1024 * 1024))
+                if not chunk or b"\x00" in chunk[:1024]:
+                    return None
+
+                try:
+                    text = chunk.decode("utf-8")
+                except UnicodeDecodeError:
+                    try:
+                        text = chunk.decode("latin-1")
+                    except Exception:
+                        return None
+
+                lines = text.splitlines()
+                matching_lines = []
+                for line_idx, line in enumerate(lines, 1):
+                    compare_line = line if case_sensitive else line.lower()
+                    if target in compare_line:
+                        snippet = line.strip()
+                        if len(snippet) > 160:
+                            idx = compare_line.find(target)
+                            start = max(0, idx - 40)
+                            end = min(len(snippet), idx + len(target) + 80)
+                            snippet = ("..." if start > 0 else "") + snippet[start:end] + ("..." if end < len(snippet) else "")
+                        matching_lines.append({
+                            "line": line_idx,
+                            "snippet": snippet
+                        })
+                        if len(matching_lines) >= 5:
+                            break
+
+                if matching_lines:
+                    return {
+                        "name": file_name,
+                        "path": file_path,
+                        "type": "file",
+                        "size": size,
+                        "size_human": format_bytes(size),
+                        "mode": entry.get("mode", "-rw-r--r--"),
+                        "uid": entry.get("uid", 0),
+                        "gid": entry.get("gid", 0),
+                        "inode": entry.get("inode", 0),
+                        "mtime": entry.get("mtime"),
+                        "match_count": len(matching_lines),
+                        "matches": matching_lines
+                    }
+            except Exception:
+                pass
+            return None
+
+        dirs_to_visit = [root_path]
+
+        while dirs_to_visit and matches_count < max_results:
+            dir_path = dirs_to_visit.pop(0)
+            try:
+                entries = self.listdir(dir_path)
+            except Exception:
+                continue
+
+            for entry in entries:
+                if entry["type"] == "directory":
+                    if recursive and entry["name"] not in ("proc", "sys", "dev", "lost+found"):
+                        dirs_to_visit.append(entry["path"])
+                elif entry["type"] == "file":
+                    scanned += 1
+                    now = time.time()
+                    elapsed = max(0.01, now - t0)
+
+                    if now - last_yield_time >= 0.15 or scanned == total_files:
+                        speed = round(scanned / elapsed, 1)
+                        yield {
+                            "type": "progress",
+                            "scanned": scanned,
+                            "total": total_files,
+                            "current_file": entry["name"],
+                            "current_path": entry["path"],
+                            "matches_count": matches_count,
+                            "speed": speed,
+                            "elapsed": round(elapsed, 1)
+                        }
+                        last_yield_time = now
+
+                    match_res = check_file(entry)
+                    if match_res:
+                        matches_count += 1
+                        yield {
+                            "type": "match",
+                            "match": match_res,
+                            "matches_count": matches_count
+                        }
+                        if matches_count >= max_results:
+                            break
+
+        total_elapsed = max(0.01, time.time() - t0)
+        yield {
+            "type": "done",
+            "scanned": scanned,
+            "total": total_files or scanned,
+            "matches_count": matches_count,
+            "elapsed": round(total_elapsed, 2),
+            "speed": round(scanned / total_elapsed, 1)
+        }
+
+    def search_stream(
+        self,
+        query: str,
+        root_path: str = "/",
+        max_results: int = 250
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Stream filename search progress and matches as a generator."""
+        q_lower = query.lower()
+        t0 = time.time()
+        scanned = 0
+        matches_count = 0
+        last_yield = t0
+
+        yield {
+            "type": "start",
+            "query": query,
+            "root_path": root_path,
+            "total": None
+        }
+
+        dirs_to_visit = [root_path]
+
+        while dirs_to_visit and matches_count < max_results:
+            dir_path = dirs_to_visit.pop(0)
+            try:
+                entries = self.listdir(dir_path)
+            except Exception:
+                continue
+
+            for entry in entries:
+                scanned += 1
+                now = time.time()
+                elapsed = max(0.01, now - t0)
+
+                if now - last_yield >= 0.15:
+                    yield {
+                        "type": "progress",
+                        "scanned": scanned,
+                        "total": None,
+                        "current_file": entry["name"],
+                        "current_path": entry["path"],
+                        "matches_count": matches_count,
+                        "speed": round(scanned / elapsed, 1),
+                        "elapsed": round(elapsed, 1)
+                    }
+                    last_yield = now
+
+                if q_lower in entry["name"].lower():
+                    matches_count += 1
+                    yield {
+                        "type": "match",
+                        "match": entry,
+                        "matches_count": matches_count
+                    }
+                    if matches_count >= max_results:
+                        break
+
+                if entry["type"] == "directory" and entry["name"] not in ("proc", "sys", "dev", "lost+found"):
+                    dirs_to_visit.append(entry["path"])
+
+        total_elapsed = max(0.01, time.time() - t0)
+        yield {
+            "type": "done",
+            "scanned": scanned,
+            "total": scanned,
+            "matches_count": matches_count,
+            "elapsed": round(total_elapsed, 2),
+            "speed": round(scanned / total_elapsed, 1)
+        }

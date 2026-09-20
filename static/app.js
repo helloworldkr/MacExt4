@@ -68,6 +68,24 @@ let inFileMatches = [];
 let activeInFileMatchIndex = -1;
 let inFileCaseSensitive = false;
 
+// Search Progress Panel Elements
+const searchProgressPanel = document.getElementById("searchProgressPanel");
+const searchProgressTitle = document.getElementById("searchProgressTitle");
+const searchProgressSub = document.getElementById("searchProgressSub");
+const searchSpinner = document.getElementById("searchSpinner");
+const searchSpeedBadge = document.getElementById("searchSpeedBadge");
+const searchTimeBadge = document.getElementById("searchTimeBadge");
+const btnStopSearch = document.getElementById("btnStopSearch");
+const searchProgressBar = document.getElementById("searchProgressBar");
+const searchScannedCount = document.getElementById("searchScannedCount");
+const searchPercentText = document.getElementById("searchPercentText");
+const searchCurrentFile = document.getElementById("searchCurrentFile");
+const searchFoundCount = document.getElementById("searchFoundCount");
+
+let searchAbortController = null;
+let isSearchActive = false;
+let streamResultsCount = 0;
+
 // Icons SVG helper
 function getFileIcon(type, name) {
   if (type === "directory") {
@@ -240,6 +258,12 @@ function setupEventListeners() {
         searchInput.placeholder = "Filter or search files...";
       }
       onSearchInput();
+    });
+  }
+
+  if (btnStopSearch) {
+    btnStopSearch.addEventListener("click", () => {
+      stopSearch("stopped");
     });
   }
 
@@ -716,121 +740,325 @@ function renderTable(entries) {
   });
 }
 
-// Search Handler
-async function onSearchInput() {
-  const query = searchInput.value.trim();
-  btnClearSearch.classList.toggle("hidden", !query);
-
-  if (!query) {
-    renderTable(currentEntries);
+// Search Progress Functions
+function showSearchProgress(show, isGrep = false, query = "") {
+  if (!searchProgressPanel) return;
+  if (!show) {
+    searchProgressPanel.classList.add("hidden");
+    isSearchActive = false;
     return;
   }
 
-  // Inside Files (Grep) Search
-  if (chkContentSearch && chkContentSearch.checked) {
-    fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7">Searching inside file contents for "${escapeHtml(query)}"...</td></tr>`;
-    try {
-      const isRecursive = chkDeepSearch ? chkDeepSearch.checked : false;
-      const res = await fetch(`/api/grep?q=${encodeURIComponent(query)}&path=${encodeURIComponent(currentPath)}&recursive=${isRecursive}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Search failed");
-      renderGrepResults(data.results || [], query);
-    } catch (e) {
-      fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7" style="color: #ef4444;">Grep search failed: ${e.message}</td></tr>`;
-    }
-    return;
+  isSearchActive = true;
+  searchProgressPanel.classList.remove("hidden");
+  if (searchSpinner) searchSpinner.classList.remove("hidden");
+  if (btnStopSearch) {
+    btnStopSearch.disabled = false;
+    btnStopSearch.classList.remove("hidden");
   }
+  if (searchProgressTitle) {
+    searchProgressTitle.textContent = isGrep
+      ? `Searching file contents for "${query}"...`
+      : `Searching filenames for "${query}"...`;
+  }
+  if (searchProgressSub) searchProgressSub.textContent = "Scanning files on Linux partition...";
+  if (searchProgressBar) {
+    searchProgressBar.style.width = "0%";
+    searchProgressBar.style.background = "linear-gradient(90deg, #38bdf8, #818cf8, #c084fc)";
+  }
+  if (searchScannedCount) searchScannedCount.textContent = "0 / 0";
+  if (searchPercentText) searchPercentText.textContent = "(0%)";
+  if (searchCurrentFile) searchCurrentFile.textContent = "Initializing scan...";
+  if (searchFoundCount) searchFoundCount.textContent = "0";
+  if (searchSpeedBadge) searchSpeedBadge.textContent = "0 files/s";
+  if (searchTimeBadge) searchTimeBadge.textContent = "0.0s";
+}
 
-  // Filename Deep Search
-  if (chkDeepSearch.checked) {
-    fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7">Searching recursively for "${escapeHtml(query)}"...</td></tr>`;
-    try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(currentPath)}`);
-      const data = await res.json();
-      renderTable(data.results || []);
-    } catch (e) {
-      fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7" style="color: #ef4444;">Search failed: ${e.message}</td></tr>`;
+function stopSearch(reason = "stopped") {
+  if (searchAbortController) {
+    searchAbortController.abort();
+    searchAbortController = null;
+  }
+  isSearchActive = false;
+  if (searchSpinner) searchSpinner.classList.add("hidden");
+  if (btnStopSearch) btnStopSearch.classList.add("hidden");
+  if (searchProgressSub) {
+    if (reason === "stopped") {
+      searchProgressSub.textContent = `Search stopped. Found ${streamResultsCount} match${streamResultsCount === 1 ? '' : 'es'}.`;
+    } else if (reason === "error") {
+      searchProgressSub.textContent = "Search encountered an error.";
     }
-  } else {
-    sortAndRenderEntries();
   }
 }
 
-// Render Grep Content Search Results
-function renderGrepResults(results, query) {
-  if (!results || results.length === 0) {
-    fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7">No matching files containing "${escapeHtml(query)}" found.</td></tr>`;
-    return;
+// Streaming Search
+async function startStreamingSearch(url, isGrep, query) {
+  if (searchAbortController) {
+    searchAbortController.abort();
   }
+  searchAbortController = new AbortController();
+  const signal = searchAbortController.signal;
 
-  fileTableBody.innerHTML = "";
-  results.forEach(item => {
-    const tr = document.createElement("tr");
-    tr.className = "file-row";
+  showSearchProgress(true, isGrep, query);
+  streamResultsCount = 0;
+  fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7">Scanning filesystem for "${escapeHtml(query)}"...</td></tr>`;
 
-    const nameCell = document.createElement("td");
-    nameCell.className = "file-name-cell";
+  try {
+    const response = await fetch(url, { signal });
+    if (!response.ok) throw new Error(`Search error (${response.status})`);
 
-    let snippetsHtml = "";
-    if (item.matches && item.matches.length > 0) {
-      snippetsHtml = `
-        <div class="grep-snippets-box">
-          ${item.matches.map(m => {
-            const escaped = escapeHtml(m.snippet);
-            const escapedQ = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            const highlighted = escaped.replace(new RegExp(escapedQ, "gi"), match => `<mark>${match}</mark>`);
-            return `<div class="grep-snippet-item" data-path="${escapeHtml(item.path)}" data-query="${escapeHtml(query)}">
-              <span class="grep-snippet-num">L${m.line}:</span>
-              <span class="grep-snippet-text">${highlighted}</span>
-            </div>`;
-          }).join("")}
-        </div>
-      `;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop();
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (line.startsWith("data: ")) {
+          try {
+            const event = JSON.parse(line.slice(6));
+            handleSearchEvent(event, isGrep, query);
+          } catch (e) {
+            console.error("Failed to parse search event", e);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError") {
+      stopSearch("stopped");
+    } else {
+      stopSearch("error");
+      fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7" style="color: #ef4444;">Search failed: ${err.message}</td></tr>`;
+    }
+  }
+}
+
+function handleSearchEvent(event, isGrep, query) {
+  if (event.type === "start") {
+    if (event.total) {
+      if (searchScannedCount) searchScannedCount.textContent = `0 / ${event.total.toLocaleString()}`;
+      if (searchPercentText) searchPercentText.textContent = "(0%)";
+    } else {
+      if (searchScannedCount) searchScannedCount.textContent = "0 / calculating...";
+      if (searchPercentText) searchPercentText.textContent = "";
+    }
+  } else if (event.type === "progress") {
+    const total = event.total;
+    if (total && total > 0) {
+      const pct = Math.min(100, Math.round((event.scanned / total) * 100));
+      if (searchProgressBar) searchProgressBar.style.width = `${pct}%`;
+      if (searchPercentText) searchPercentText.textContent = `(${pct}%)`;
+      if (searchScannedCount) searchScannedCount.textContent = `${event.scanned.toLocaleString()} / ${total.toLocaleString()}`;
+    } else {
+      if (searchScannedCount) searchScannedCount.textContent = `${event.scanned.toLocaleString()} files`;
+      if (searchProgressBar) {
+        searchProgressBar.style.width = "100%";
+        searchProgressBar.style.background = "linear-gradient(90deg, #38bdf8, #c084fc)";
+      }
+      if (searchPercentText) searchPercentText.textContent = "";
     }
 
-    nameCell.innerHTML = `
-      <div>
-        <div style="display: flex; align-items: center;">
-          ${getFileIcon(item.type, item.name)}
-          <span style="font-weight: 500;">${escapeHtml(item.name)}</span>
-          <span class="grep-match-badge">${item.match_count} match${item.match_count > 1 ? 'es' : ''}</span>
-        </div>
-        ${snippetsHtml}
+    if (event.current_file && searchCurrentFile) {
+      searchCurrentFile.textContent = event.current_file;
+      searchCurrentFile.title = event.current_path || event.current_file;
+    }
+    if (event.speed && searchSpeedBadge) {
+      searchSpeedBadge.textContent = `${event.speed} files/s`;
+    }
+    if (event.elapsed !== undefined && searchTimeBadge) {
+      searchTimeBadge.textContent = `${event.elapsed}s`;
+    }
+    if (searchFoundCount) {
+      searchFoundCount.textContent = `${event.matches_count || streamResultsCount}`;
+    }
+
+  } else if (event.type === "match") {
+    const match = event.match;
+    if (streamResultsCount === 0) {
+      fileTableBody.innerHTML = "";
+    }
+    streamResultsCount++;
+    if (searchFoundCount) searchFoundCount.textContent = `${streamResultsCount}`;
+
+    if (isGrep) {
+      appendGrepRow(match, query);
+    } else {
+      appendFileRow(match);
+    }
+
+  } else if (event.type === "done") {
+    stopSearch("done");
+    if (searchProgressBar) {
+      searchProgressBar.style.width = "100%";
+      searchProgressBar.style.background = "linear-gradient(90deg, #10b981, #06b6d4)";
+    }
+    if (searchProgressTitle) {
+      searchProgressTitle.textContent = `Scan Complete!`;
+    }
+    if (searchProgressSub) {
+      searchProgressSub.textContent = `Scanned ${event.scanned.toLocaleString()} files in ${event.elapsed}s (${event.speed || 0} files/s) • ${event.matches_count} matches found.`;
+    }
+    if (searchCurrentFile) searchCurrentFile.textContent = "Scan finished.";
+    if (searchScannedCount) searchScannedCount.textContent = `${event.scanned.toLocaleString()} / ${(event.total || event.scanned).toLocaleString()}`;
+    if (searchPercentText) searchPercentText.textContent = "(100%)";
+    if (searchTimeBadge) searchTimeBadge.textContent = `${event.elapsed}s`;
+    if (searchFoundCount) searchFoundCount.textContent = `${event.matches_count}`;
+
+    if (streamResultsCount === 0) {
+      fileTableBody.innerHTML = `<tr class="empty-row"><td colspan="7">No matching files containing "${escapeHtml(query)}" found.</td></tr>`;
+    }
+  } else if (event.type === "error") {
+    stopSearch("error");
+    if (searchProgressSub) searchProgressSub.textContent = `Error: ${event.error}`;
+  }
+}
+
+function appendGrepRow(item, query) {
+  const tr = document.createElement("tr");
+  tr.className = "file-row";
+
+  const nameCell = document.createElement("td");
+  nameCell.className = "file-name-cell";
+
+  let snippetsHtml = "";
+  if (item.matches && item.matches.length > 0) {
+    snippetsHtml = `
+      <div class="grep-snippets-box">
+        ${item.matches.map(m => {
+          const escaped = escapeHtml(m.snippet);
+          const escapedQ = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const highlighted = escaped.replace(new RegExp(escapedQ, "gi"), match => `<mark>${match}</mark>`);
+          return `<div class="grep-snippet-item" data-path="${escapeHtml(item.path)}" data-query="${escapeHtml(query)}">
+            <span class="grep-snippet-num">L${m.line}:</span>
+            <span class="grep-snippet-text">${highlighted}</span>
+          </div>`;
+        }).join("")}
       </div>
     `;
+  }
 
-    const sizeCell = document.createElement("td");
-    sizeCell.className = "col-size";
-    sizeCell.textContent = item.size_human;
+  nameCell.innerHTML = `
+    <div>
+      <div style="display: flex; align-items: center;">
+        ${getFileIcon(item.type, item.name)}
+        <span style="font-weight: 500;">${escapeHtml(item.name)}</span>
+        <span class="grep-match-badge">${item.match_count} match${item.match_count > 1 ? 'es' : ''}</span>
+      </div>
+      ${snippetsHtml}
+    </div>
+  `;
 
-    const modeCell = document.createElement("td");
-    modeCell.className = "col-mode";
-    modeCell.textContent = item.mode || "-rw-r--r--";
+  const sizeCell = document.createElement("td");
+  sizeCell.className = "col-size";
+  sizeCell.textContent = item.size_human;
 
-    const ownerCell = document.createElement("td");
-    ownerCell.className = "col-owner";
-    ownerCell.textContent = `${item.uid}:${item.gid}`;
+  const modeCell = document.createElement("td");
+  modeCell.className = "col-mode";
+  modeCell.textContent = item.mode || "-rw-r--r--";
 
-    const inodeCell = document.createElement("td");
-    inodeCell.className = "col-inode";
-    inodeCell.textContent = item.inode || "—";
+  const ownerCell = document.createElement("td");
+  ownerCell.className = "col-owner";
+  ownerCell.textContent = `${item.uid}:${item.gid}`;
 
-    const mtimeCell = document.createElement("td");
-    mtimeCell.className = "col-mtime";
-    mtimeCell.textContent = item.mtime || "—";
+  const inodeCell = document.createElement("td");
+  inodeCell.className = "col-inode";
+  inodeCell.textContent = item.inode || "—";
 
-    const actionsCell = document.createElement("td");
-    actionsCell.className = "col-actions";
-    const actGroup = document.createElement("div");
-    actGroup.className = "action-btns";
+  const mtimeCell = document.createElement("td");
+  mtimeCell.className = "col-mtime";
+  mtimeCell.textContent = item.mtime || "—";
 
+  const actionsCell = document.createElement("td");
+  actionsCell.className = "col-actions";
+  const actGroup = document.createElement("div");
+  actGroup.className = "action-btns";
+
+  const btnPrev = document.createElement("button");
+  btnPrev.className = "btn-tbl-action";
+  btnPrev.title = "Preview";
+  btnPrev.textContent = "View";
+  btnPrev.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openPreview(item.path, query);
+  });
+  actGroup.appendChild(btnPrev);
+
+  const btnDl = document.createElement("button");
+  btnDl.className = "btn-tbl-action";
+  btnDl.title = "Download";
+  btnDl.textContent = "Get";
+  btnDl.addEventListener("click", (e) => {
+    e.stopPropagation();
+    window.location.href = `/api/download?path=${encodeURIComponent(item.path)}`;
+  });
+  actGroup.appendChild(btnDl);
+
+  actionsCell.appendChild(actGroup);
+
+  tr.appendChild(nameCell);
+  tr.appendChild(sizeCell);
+  tr.appendChild(modeCell);
+  tr.appendChild(ownerCell);
+  tr.appendChild(inodeCell);
+  tr.appendChild(mtimeCell);
+  tr.appendChild(actionsCell);
+
+  tr.addEventListener("click", () => {
+    openPreview(item.path, query);
+  });
+
+  fileTableBody.appendChild(tr);
+}
+
+function appendFileRow(item) {
+  const tr = document.createElement("tr");
+  tr.className = "file-row";
+
+  const nameCell = document.createElement("td");
+  nameCell.className = "file-name-cell";
+  nameCell.innerHTML = `${getFileIcon(item.type, item.name)} <span>${escapeHtml(item.name)}${item.target ? ` <span style="color: #a78bfa;">&rarr; ${escapeHtml(item.target)}</span>` : ""}</span>`;
+
+  const sizeCell = document.createElement("td");
+  sizeCell.className = "col-size";
+  sizeCell.textContent = item.size_human;
+
+  const modeCell = document.createElement("td");
+  modeCell.className = "col-mode";
+  modeCell.textContent = item.mode || "-rw-r--r--";
+
+  const ownerCell = document.createElement("td");
+  ownerCell.className = "col-owner";
+  ownerCell.textContent = `${item.uid}:${item.gid}`;
+
+  const inodeCell = document.createElement("td");
+  inodeCell.className = "col-inode";
+  inodeCell.textContent = item.inode || "—";
+
+  const mtimeCell = document.createElement("td");
+  mtimeCell.className = "col-mtime";
+  mtimeCell.textContent = item.mtime || "—";
+
+  const actionsCell = document.createElement("td");
+  actionsCell.className = "col-actions";
+  const actGroup = document.createElement("div");
+  actGroup.className = "action-btns";
+
+  if (item.type === "file") {
     const btnPrev = document.createElement("button");
     btnPrev.className = "btn-tbl-action";
     btnPrev.title = "Preview";
     btnPrev.textContent = "View";
     btnPrev.addEventListener("click", (e) => {
       e.stopPropagation();
-      openPreview(item.path, query);
+      openPreview(item.path);
     });
     actGroup.appendChild(btnPrev);
 
@@ -843,24 +1071,74 @@ function renderGrepResults(results, query) {
       window.location.href = `/api/download?path=${encodeURIComponent(item.path)}`;
     });
     actGroup.appendChild(btnDl);
-
-    actionsCell.appendChild(actGroup);
-
-    tr.appendChild(nameCell);
-    tr.appendChild(sizeCell);
-    tr.appendChild(modeCell);
-    tr.appendChild(ownerCell);
-    tr.appendChild(inodeCell);
-    tr.appendChild(mtimeCell);
-    tr.appendChild(actionsCell);
-
-    // Row click
-    tr.addEventListener("click", () => {
-      openPreview(item.path, query);
+  } else if (item.type === "directory") {
+    const btnZip = document.createElement("button");
+    btnZip.className = "btn-tbl-action";
+    btnZip.title = "Download ZIP";
+    btnZip.textContent = ".ZIP";
+    btnZip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      window.location.href = `/api/download-zip?path=${encodeURIComponent(item.path)}`;
     });
+    actGroup.appendChild(btnZip);
+  }
 
-    fileTableBody.appendChild(tr);
+  actionsCell.appendChild(actGroup);
+
+  tr.appendChild(nameCell);
+  tr.appendChild(sizeCell);
+  tr.appendChild(modeCell);
+  tr.appendChild(ownerCell);
+  tr.appendChild(inodeCell);
+  tr.appendChild(mtimeCell);
+  tr.appendChild(actionsCell);
+
+  tr.addEventListener("click", () => {
+    if (item.type === "directory") {
+      loadDirectory(item.path);
+    } else if (item.type === "file") {
+      openPreview(item.path);
+    }
   });
+
+  fileTableBody.appendChild(tr);
+}
+
+// Search Handler
+function onSearchInput() {
+  const query = searchInput.value.trim();
+  btnClearSearch.classList.toggle("hidden", !query);
+
+  if (!query) {
+    stopSearch("stopped");
+    showSearchProgress(false);
+    renderTable(currentEntries);
+    return;
+  }
+
+  // Inside Files (Grep) Search
+  if (chkContentSearch && chkContentSearch.checked) {
+    const isRecursive = chkDeepSearch ? chkDeepSearch.checked : false;
+    startStreamingSearch(
+      `/api/grep/stream?q=${encodeURIComponent(query)}&path=${encodeURIComponent(currentPath)}&recursive=${isRecursive}`,
+      true,
+      query
+    );
+    return;
+  }
+
+  // Filename Deep Search
+  if (chkDeepSearch.checked) {
+    startStreamingSearch(
+      `/api/search/stream?q=${encodeURIComponent(query)}&path=${encodeURIComponent(currentPath)}`,
+      false,
+      query
+    );
+  } else {
+    stopSearch("stopped");
+    showSearchProgress(false);
+    sortAndRenderEntries();
+  }
 }
 
 // In-File Search Engine

@@ -337,6 +337,65 @@ def api_grep(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/search/stream")
+def api_search_stream(
+    q: str = Query(..., description="Search query"),
+    path: str = Query("/", description="Root search path")
+):
+    """Stream filename search progress and matches using Server-Sent Events (SSE)."""
+    fs = get_current_fs()
+
+    def event_generator():
+        try:
+            for event in fs.search_stream(query=q, root_path=path):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.get("/api/grep/stream")
+def api_grep_stream(
+    q: str = Query(..., description="Search query string to find inside files"),
+    path: str = Query("/", description="Root search path"),
+    recursive: bool = Query(False, description="Recursive directory scan"),
+    case_sensitive: bool = Query(False, description="Case-sensitive match")
+):
+    """Stream grep search progress, scanned files count, and matches as SSE."""
+    fs = get_current_fs()
+
+    def event_generator():
+        try:
+            for event in fs.grep_content_stream(
+                query=q,
+                root_path=path,
+                recursive=recursive,
+                case_sensitive=case_sensitive
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
 @app.post("/api/create-sample")
 def api_create_sample():
     """Generate sample Linux SSD image."""

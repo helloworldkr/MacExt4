@@ -194,6 +194,49 @@
 
       <!-- Files Table Container -->
       <section class="table-container">
+        <!-- Search Progress Panel -->
+        <div class="search-progress-panel hidden" id="searchProgressPanel">
+          <div class="search-progress-header">
+            <div class="search-progress-status">
+              <div class="search-spinner" id="searchSpinner"></div>
+              <div class="search-title-group">
+                <span class="search-progress-title" id="searchProgressTitle">Searching inside file contents...</span>
+                <span class="search-progress-subtitle" id="searchProgressSub">Scanning files on Linux drive</span>
+              </div>
+            </div>
+            <div class="search-progress-actions">
+              <span class="search-badge-speed" id="searchSpeedBadge">0 files/s</span>
+              <span class="search-badge-time" id="searchTimeBadge">0.0s</span>
+              <button class="btn btn-sm btn-danger-outline" id="btnStopSearch" title="Stop search and keep current results">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+                </svg>
+                Stop
+              </button>
+            </div>
+          </div>
+
+          <div class="search-bar-track">
+            <div class="search-bar-fill" id="searchProgressBar"></div>
+          </div>
+
+          <div class="search-progress-footer">
+            <div class="search-stat">
+              <span class="stat-label">Scanned:</span>
+              <strong class="stat-val" id="searchScannedCount">0 / 0</strong>
+              <span class="stat-pct" id="searchPercentText">(0%)</span>
+            </div>
+            <div class="search-stat search-curr-file">
+              <span class="stat-label">Current:</span>
+              <span class="stat-val stat-file-name" id="searchCurrentFile">—</span>
+            </div>
+            <div class="search-stat">
+              <span class="stat-label">Matches Found:</span>
+              <strong class="stat-val match-highlight" id="searchFoundCount">0</strong>
+            </div>
+          </div>
+        </div>
+
         <table class="file-table" id="fileTable">
           <thead>
             <tr>
