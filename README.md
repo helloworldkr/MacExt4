@@ -84,8 +84,8 @@ Apple's macOS cannot natively read Linux ext4 filesystems. Traditionally, Mac us
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/your-username/ReadLinuxSSD.git
-cd ReadLinuxSSD
+git clone https://github.com/helloworldkr/MacExt4.git
+cd MacExt4
 ```
 
 ### 2. Install Dependencies & Build Desktop App
