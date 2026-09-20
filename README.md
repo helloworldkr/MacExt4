@@ -15,6 +15,10 @@
 
 [Features](#-key-features) • [Why Not Paragon?](#-why-choose-macext4-over-paragon-extfs) • [Quick Start](#-quick-start) • [Ways to Use](#-ways-to-use) • [Search & Grep Engine](#-real-time-streaming-search--grep) • [FAQ](#-frequently-asked-questions)
 
+<br/><br/>
+
+<img src="docs/app_screenshot.jpg" alt="MacExt4 — Linux SSD Reader for macOS Interface" width="900" style="border-radius: 10px; max-width: 100%; box-shadow: 0 12px 36px rgba(0,0,0,0.5);" />
+
 </div>
 
 ---
