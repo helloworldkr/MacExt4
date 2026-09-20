@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# PyInstaller & build outputs
+build/
+dist/
+*.spec.bak
+
+# Generated sample disk images
+*.img
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE configs
+.idea/
+.vscode/
+*.swp
