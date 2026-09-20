@@ -963,8 +963,8 @@ function appendGrepRow(item, query) {
       <div class="grep-snippets-box">
         ${item.matches.map(m => {
           const escaped = escapeHtml(m.snippet);
-          const escapedQ = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const highlighted = escaped.replace(new RegExp(escapedQ, "gi"), match => `<mark>${match}</mark>`);
+          const safeQ = escapeHtml(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const highlighted = escaped.replace(new RegExp(safeQ, "gi"), match => `<mark>${match}</mark>`);
           return `<div class="grep-snippet-item" data-path="${escapeHtml(item.path)}" data-query="${escapeHtml(query)}">
             <span class="grep-snippet-num">L${m.line}:</span>
             <span class="grep-snippet-text">${highlighted}</span>
