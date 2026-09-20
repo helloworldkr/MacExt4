@@ -241,14 +241,31 @@ function setupEventListeners() {
   btnNavUp.addEventListener("click", navigateUp);
   btnNavRoot.addEventListener("click", () => loadDirectory("/"));
 
-  searchInput.addEventListener("input", onSearchInput);
+  searchInput.addEventListener("input", () => onSearchInput(false));
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (searchDebounceTimer) {
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = null;
+      }
+      executeSearch();
+    }
+  });
+
   btnClearSearch.addEventListener("click", () => {
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
     searchInput.value = "";
     btnClearSearch.classList.add("hidden");
+    stopSearch("stopped");
+    showSearchProgress(false);
     renderTable(currentEntries);
   });
 
-  chkDeepSearch.addEventListener("change", onSearchInput);
+  chkDeepSearch.addEventListener("change", () => onSearchInput(true));
 
   if (chkContentSearch) {
     chkContentSearch.addEventListener("change", () => {
@@ -792,6 +809,8 @@ function stopSearch(reason = "stopped") {
 }
 
 // Streaming Search
+let searchDebounceTimer = null;
+
 async function startStreamingSearch(url, isGrep, query) {
   if (searchAbortController) {
     searchAbortController.abort();
@@ -815,18 +834,22 @@ async function startStreamingSearch(url, isGrep, query) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
 
       const parts = buffer.split("\n\n");
-      buffer = parts.pop();
+      buffer = parts.pop() || "";
 
       for (const part of parts) {
-        const line = part.trim();
-        if (line.startsWith("data: ")) {
-          try {
-            const event = JSON.parse(line.slice(6));
-            handleSearchEvent(event, isGrep, query);
-          } catch (e) {
-            console.error("Failed to parse search event", e);
+        const lines = part.split("\n");
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (line.startsWith("data: ")) {
+            try {
+              const event = JSON.parse(line.slice(6));
+              handleSearchEvent(event, isGrep, query);
+            } catch (e) {
+              console.error("Failed to parse search event", e, line);
+            }
           }
         }
       }
@@ -843,11 +866,17 @@ async function startStreamingSearch(url, isGrep, query) {
 
 function handleSearchEvent(event, isGrep, query) {
   if (event.type === "start") {
+    if (searchCurrentFile) {
+      searchCurrentFile.textContent = event.current_file || "Reading directory...";
+    }
+    if (searchProgressSub) {
+      searchProgressSub.textContent = isGrep ? "Scanning file text contents..." : "Scanning filenames...";
+    }
     if (event.total) {
       if (searchScannedCount) searchScannedCount.textContent = `0 / ${event.total.toLocaleString()}`;
       if (searchPercentText) searchPercentText.textContent = "(0%)";
     } else {
-      if (searchScannedCount) searchScannedCount.textContent = "0 / calculating...";
+      if (searchScannedCount) searchScannedCount.textContent = "0 files scanned";
       if (searchPercentText) searchPercentText.textContent = "";
     }
   } else if (event.type === "progress") {
@@ -1105,10 +1134,41 @@ function appendFileRow(item) {
 }
 
 // Search Handler
-function onSearchInput() {
+function onSearchInput(immediate = false) {
   const query = searchInput.value.trim();
   btnClearSearch.classList.toggle("hidden", !query);
 
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = null;
+  }
+
+  if (!query) {
+    stopSearch("stopped");
+    showSearchProgress(false);
+    renderTable(currentEntries);
+    return;
+  }
+
+  const isGrep = chkContentSearch && chkContentSearch.checked;
+  const isDeep = chkDeepSearch && chkDeepSearch.checked;
+
+  if (immediate || (!isGrep && !isDeep)) {
+    executeSearch();
+  } else {
+    if (isGrep && searchProgressPanel) {
+      showSearchProgress(true, true, query);
+      if (searchCurrentFile) searchCurrentFile.textContent = "Ready to search...";
+      if (searchProgressSub) searchProgressSub.textContent = "Press Enter to start scanning immediately";
+    }
+    searchDebounceTimer = setTimeout(() => {
+      executeSearch();
+    }, isGrep ? 350 : 200);
+  }
+}
+
+function executeSearch() {
+  const query = searchInput.value.trim();
   if (!query) {
     stopSearch("stopped");
     showSearchProgress(false);

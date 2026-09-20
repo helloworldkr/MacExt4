@@ -464,6 +464,23 @@ class LinuxFileSystem:
         entries.sort(key=lambda x: (0 if x["type"] == "directory" else 1, x["name"].lower()))
         return entries
 
+    def read_file_by_inode(self, inode_no: int, offset: int = 0, limit: Optional[int] = None) -> bytes:
+        """Directly read bytes from an inode without re-traversing directory trees."""
+        if not self.volume or not getattr(self.volume, "inodes", None):
+            return b""
+        try:
+            inode = self.volume.inodes[inode_no]
+            if not isinstance(inode, ext4.File):
+                return b""
+            with inode.open() as f:
+                if offset > 0:
+                    f.seek(offset)
+                if limit is not None:
+                    return f.read(limit)
+                return f.read()
+        except Exception:
+            return b""
+
     def read_file(self, path: str, offset: int = 0, limit: Optional[int] = None) -> bytes:
         """Read bytes from a file."""
         inode, _ = self._resolve_inode(path)
@@ -637,13 +654,19 @@ class LinuxFileSystem:
                 return
 
             try:
-                # Read up to 2MB of file content
-                chunk = self.read_file(file_path, limit=min(size, 2 * 1024 * 1024))
-                if not chunk:
+                # Direct inode read is orders of magnitude faster
+                inode_no = entry.get("inode")
+                if inode_no:
+                    chunk = self.read_file_by_inode(inode_no, limit=min(size, 2 * 1024 * 1024))
+                else:
+                    chunk = self.read_file(file_path, limit=min(size, 2 * 1024 * 1024))
+                if not chunk or b"\x00" in chunk[:1024]:
                     return
 
-                # Quick binary byte check
-                if b"\x00" in chunk[:1024]:
+                # Fast binary byte check before decoding strings
+                target_bytes = query.encode("utf-8") if case_sensitive else query.lower().encode("utf-8")
+                compare_bytes = chunk if case_sensitive else chunk.lower()
+                if target_bytes not in compare_bytes:
                     return
 
                 # Decode to string
@@ -724,14 +747,16 @@ class LinuxFileSystem:
         recursive: bool = False,
         case_sensitive: bool = False,
         max_file_size: int = 5 * 1024 * 1024,
-        max_results: int = 250
+        max_results: int = 250,
+        stop_event: Optional[threading.Event] = None
     ) -> Generator[Dict[str, Any], None, None]:
-        """Stream search progress and matches as a generator."""
+        """Stream search progress and matches as a generator with live cancellation support."""
         if not query:
             yield {"type": "done", "scanned": 0, "total": 0, "matches_count": 0, "elapsed": 0.0, "speed": 0}
             return
 
         target = query if case_sensitive else query.lower()
+        target_bytes = query.encode("utf-8") if case_sensitive else query.lower().encode("utf-8")
         t0 = time.time()
 
         binary_exts = {
@@ -741,20 +766,23 @@ class LinuxFileSystem:
             ".pdf", ".exe", ".dylib", ".so", ".o", ".a", ".pyc"
         }
 
+        # Pre-fetch initial directory to avoid double listdir on root_path
+        initial_entries = None
         total_files = None
-        if not recursive:
-            try:
-                entries = self.listdir(root_path)
-                total_files = len([e for e in entries if e.get("type") == "file"])
-            except Exception:
-                total_files = None
+        try:
+            initial_entries = self.listdir(root_path)
+            if not recursive:
+                total_files = len([e for e in initial_entries if e.get("type") == "file"])
+        except Exception:
+            initial_entries = None
 
         yield {
             "type": "start",
             "query": query,
             "root_path": root_path,
             "recursive": recursive,
-            "total": total_files
+            "total": total_files,
+            "current_file": f"Scanning {root_path}..."
         }
 
         scanned = 0
@@ -771,8 +799,19 @@ class LinuxFileSystem:
                 return None
 
             try:
-                chunk = self.read_file(file_path, limit=min(size, 2 * 1024 * 1024))
+                # Fast direct inode read avoiding recursive path resolution
+                inode_no = entry.get("inode")
+                if inode_no:
+                    chunk = self.read_file_by_inode(inode_no, limit=min(size, 2 * 1024 * 1024))
+                else:
+                    chunk = self.read_file(file_path, limit=min(size, 2 * 1024 * 1024))
+
                 if not chunk or b"\x00" in chunk[:1024]:
+                    return None
+
+                # Sub-millisecond byte pre-filter
+                compare_bytes = chunk if case_sensitive else chunk.lower()
+                if target_bytes not in compare_bytes:
                     return None
 
                 try:
@@ -823,13 +862,22 @@ class LinuxFileSystem:
         dirs_to_visit = [root_path]
 
         while dirs_to_visit and matches_count < max_results:
+            if stop_event and stop_event.is_set():
+                break
+
             dir_path = dirs_to_visit.pop(0)
-            try:
-                entries = self.listdir(dir_path)
-            except Exception:
-                continue
+            if dir_path == root_path and initial_entries is not None:
+                entries = initial_entries
+            else:
+                try:
+                    entries = self.listdir(dir_path)
+                except Exception:
+                    continue
 
             for entry in entries:
+                if stop_event and stop_event.is_set():
+                    break
+
                 if entry["type"] == "directory":
                     if recursive and entry["name"] not in ("proc", "sys", "dev", "lost+found"):
                         dirs_to_visit.append(entry["path"])
@@ -838,7 +886,7 @@ class LinuxFileSystem:
                     now = time.time()
                     elapsed = max(0.01, now - t0)
 
-                    if now - last_yield_time >= 0.15 or scanned == total_files:
+                    if scanned == 1 or now - last_yield_time >= 0.08 or scanned == total_files:
                         speed = round(scanned / elapsed, 1)
                         yield {
                             "type": "progress",
@@ -877,9 +925,10 @@ class LinuxFileSystem:
         self,
         query: str,
         root_path: str = "/",
-        max_results: int = 250
+        max_results: int = 250,
+        stop_event: Optional[threading.Event] = None
     ) -> Generator[Dict[str, Any], None, None]:
-        """Stream filename search progress and matches as a generator."""
+        """Stream filename search progress and matches as a generator with live cancellation."""
         q_lower = query.lower()
         t0 = time.time()
         scanned = 0
@@ -890,12 +939,16 @@ class LinuxFileSystem:
             "type": "start",
             "query": query,
             "root_path": root_path,
-            "total": None
+            "total": None,
+            "current_file": f"Searching in {root_path}..."
         }
 
         dirs_to_visit = [root_path]
 
         while dirs_to_visit and matches_count < max_results:
+            if stop_event and stop_event.is_set():
+                break
+
             dir_path = dirs_to_visit.pop(0)
             try:
                 entries = self.listdir(dir_path)
@@ -903,11 +956,14 @@ class LinuxFileSystem:
                 continue
 
             for entry in entries:
+                if stop_event and stop_event.is_set():
+                    break
+
                 scanned += 1
                 now = time.time()
                 elapsed = max(0.01, now - t0)
 
-                if now - last_yield >= 0.15:
+                if scanned == 1 or now - last_yield >= 0.08:
                     yield {
                         "type": "progress",
                         "scanned": scanned,

@@ -9,6 +9,8 @@ import sys
 import json
 import re
 import subprocess
+import threading
+import asyncio
 import urllib.parse
 from typing import Optional, Dict, Any
 
@@ -37,6 +39,7 @@ app.add_middleware(
 active_fs: Optional[LinuxFileSystem] = None
 active_device: Optional[str] = None
 active_offset: int = 0
+fs_lock = threading.Lock()
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -338,19 +341,52 @@ def api_grep(
 
 
 @app.get("/api/search/stream")
-def api_search_stream(
+async def api_search_stream(
+    request: Request,
     q: str = Query(..., description="Search query"),
     path: str = Query("/", description="Root search path")
 ):
     """Stream filename search progress and matches using Server-Sent Events (SSE)."""
     fs = get_current_fs()
 
-    def event_generator():
+    async def event_generator():
+        queue = asyncio.Queue(maxsize=100)
+        loop = asyncio.get_running_loop()
+        stop_event = threading.Event()
+        done_sentinel = object()
+
+        def worker():
+            with fs_lock:
+                try:
+                    for event in fs.search_stream(query=q, root_path=path, stop_event=stop_event):
+                        if stop_event.is_set():
+                            break
+                        asyncio.run_coroutine_threadsafe(queue.put(event), loop).result()
+                except Exception as e:
+                    asyncio.run_coroutine_threadsafe(queue.put({"type": "error", "error": str(e)}), loop).result()
+                finally:
+                    asyncio.run_coroutine_threadsafe(queue.put(done_sentinel), loop).result()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
         try:
-            for event in fs.search_stream(query=q, root_path=path):
-                yield f"data: {json.dumps(event)}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    stop_event.set()
+                    break
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=0.25)
+                    if item is done_sentinel:
+                        break
+                    yield f"data: {json.dumps(item)}\n\n"
+                except asyncio.TimeoutError:
+                    if await request.is_disconnected():
+                        stop_event.set()
+                        break
+                    yield ": ping\n\n"
+        finally:
+            stop_event.set()
 
     return StreamingResponse(
         event_generator(),
@@ -364,7 +400,8 @@ def api_search_stream(
 
 
 @app.get("/api/grep/stream")
-def api_grep_stream(
+async def api_grep_stream(
+    request: Request,
     q: str = Query(..., description="Search query string to find inside files"),
     path: str = Query("/", description="Root search path"),
     recursive: bool = Query(False, description="Recursive directory scan"),
@@ -373,17 +410,50 @@ def api_grep_stream(
     """Stream grep search progress, scanned files count, and matches as SSE."""
     fs = get_current_fs()
 
-    def event_generator():
+    async def event_generator():
+        queue = asyncio.Queue(maxsize=100)
+        loop = asyncio.get_running_loop()
+        stop_event = threading.Event()
+        done_sentinel = object()
+
+        def worker():
+            with fs_lock:
+                try:
+                    for event in fs.grep_content_stream(
+                        query=q,
+                        root_path=path,
+                        recursive=recursive,
+                        case_sensitive=case_sensitive,
+                        stop_event=stop_event
+                    ):
+                        if stop_event.is_set():
+                            break
+                        asyncio.run_coroutine_threadsafe(queue.put(event), loop).result()
+                except Exception as e:
+                    asyncio.run_coroutine_threadsafe(queue.put({"type": "error", "error": str(e)}), loop).result()
+                finally:
+                    asyncio.run_coroutine_threadsafe(queue.put(done_sentinel), loop).result()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
         try:
-            for event in fs.grep_content_stream(
-                query=q,
-                root_path=path,
-                recursive=recursive,
-                case_sensitive=case_sensitive
-            ):
-                yield f"data: {json.dumps(event)}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    stop_event.set()
+                    break
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=0.25)
+                    if item is done_sentinel:
+                        break
+                    yield f"data: {json.dumps(item)}\n\n"
+                except asyncio.TimeoutError:
+                    if await request.is_disconnected():
+                        stop_event.set()
+                        break
+                    yield ": ping\n\n"
+        finally:
+            stop_event.set()
 
     return StreamingResponse(
         event_generator(),
