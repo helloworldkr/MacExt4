@@ -12,10 +12,11 @@ import subprocess
 import threading
 import asyncio
 import urllib.parse
+import time
 from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, Query, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -23,6 +24,7 @@ import uvicorn
 from disk_detector import list_disks, scan_partitions, get_volume_info
 from reader import LinuxFileSystem, format_bytes
 from sample_generator import create_sample_disk
+import saved_searches
 
 app = FastAPI(title="LinuxDiskReader", description="Read Linux SSDs and ext2/3/4 partitions on macOS")
 
@@ -64,6 +66,21 @@ def get_writable_path(filename: str) -> str:
     app_data = os.path.expanduser("~/Library/Application Support/LinuxSSDReader")
     os.makedirs(app_data, exist_ok=True)
     return os.path.join(app_data, filename)
+
+
+def _clean_param(val, default=None):
+    if hasattr(val, "default"):
+        return val.default
+    return val if val is not None else default
+
+
+async def _is_client_disconnected(req) -> bool:
+    if not req:
+        return False
+    try:
+        return await req.is_disconnected()
+    except Exception:
+        return False
 
 
 def get_current_fs() -> LinuxFileSystem:
@@ -298,12 +315,215 @@ def api_download_zip(path: str = Query("/", description="Folder path to download
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/search")
-def api_search(q: str = Query(..., description="Search query"), path: str = Query("/", description="Root search path")):
-    """Search files recursively."""
+@app.post("/api/download-text")
+async def api_download_text(request: Request):
+    """Download plain text content as an attachment file."""
     try:
+        data = await request.json()
+        raw_filename = data.get("filename") or "search_results.txt"
+        filename = os.path.basename(raw_filename) or "search_results.txt"
+        if not filename.endswith(".txt"):
+            filename += ".txt"
+        content = data.get("content", "")
+        encoded_filename = urllib.parse.quote(filename)
+        headers = {
+            "Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded_filename}"
+        }
+        return Response(
+            content=content.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            headers=headers
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/search/export")
+def api_search_export(
+    q: str = Query(..., description="Search query"),
+    path: str = Query("/", description="Root search path"),
+    mode: str = Query("filename", description="Search mode: 'filename' or 'grep'"),
+    recursive: bool = Query(True, description="Recursive search"),
+    case_sensitive: bool = Query(False, description="Case-sensitive match"),
+    whole_word: bool = Query(False, description="Match whole word only"),
+    use_regex: bool = Query(False, description="Treat query as regular expression"),
+    include_exts: Optional[str] = Query(None, description="Comma-separated extensions to include"),
+    exclude_exts: Optional[str] = Query(None, description="Comma-separated extensions or folder names to exclude"),
+    type_filter: str = Query("all", description="Filter by item type: 'all', 'file', 'directory', 'symlink'"),
+    min_size: Optional[int] = Query(None, description="Minimum file size in bytes"),
+    max_size: Optional[int] = Query(None, description="Maximum file size in bytes"),
+    date_filter: Optional[str] = Query(None, description="Date modified cutoff: '24h', '7d', '30d', '1y'")
+):
+    """Export search results directly as formatted plain text report with active filters."""
+    try:
+        q = _clean_param(q, "")
+        path = _clean_param(path, "/")
+        mode = _clean_param(mode, "filename")
+        recursive = bool(_clean_param(recursive, False))
+        case_sensitive = bool(_clean_param(case_sensitive, False))
+        whole_word = bool(_clean_param(whole_word, False))
+        use_regex = bool(_clean_param(use_regex, False))
+        include_exts = _clean_param(include_exts, None)
+        exclude_exts = _clean_param(exclude_exts, None)
+        type_filter = _clean_param(type_filter, "all")
+        min_size = _clean_param(min_size, None)
+        max_size = _clean_param(max_size, None)
+        date_filter = _clean_param(date_filter, None)
+
         fs = get_current_fs()
-        results = fs.search(q, root_path=path)
+        info = fs.get_info()
+        vol_name = info.get("volume_name") or "Linux Ext4"
+
+        lines = [
+            "=" * 80,
+            "LINUX SSD EXPLORER - SEARCH RESULTS REPORT",
+            "=" * 80,
+            f"Volume / Disk : {vol_name}",
+            f"Search Query  : \"{q}\"",
+            f"Search Mode   : {'Inside Files (Grep)' if mode == 'grep' else 'Filename Search'}",
+            f"Search Scope  : {path} {'(Recursive)' if recursive else ''}",
+            f"Generated At  : {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}",
+        ]
+
+        if include_exts:
+            lines.append(f"Include Exts  : {include_exts}")
+        if exclude_exts:
+            lines.append(f"Exclude Exts  : {exclude_exts}")
+        if type_filter and type_filter != "all":
+            lines.append(f"Type Filter   : {type_filter}")
+        if min_size or max_size:
+            lines.append(f"Size Bounds   : {min_size or 0} B to {max_size or 'unlimited'} B")
+        if date_filter and date_filter != "any":
+            lines.append(f"Date Modified : {date_filter}")
+
+        if mode == "grep":
+            results = fs.grep_content(
+                query=q,
+                root_path=path,
+                recursive=recursive,
+                case_sensitive=case_sensitive,
+                whole_word=whole_word,
+                use_regex=use_regex,
+                include_exts=include_exts,
+                exclude_exts=exclude_exts,
+                min_size=min_size,
+                max_size=max_size,
+                date_filter=date_filter
+            )
+            total_matches = sum(len(r.get("matches", [])) for r in results)
+            lines.append(f"Total Matches : {len(results)} file(s) with {total_matches} occurrence(s)")
+            lines.append("=" * 80)
+            lines.append("")
+
+            for idx, item in enumerate(results, 1):
+                lines.append(f"[{idx}] {item['path']}")
+                lines.append(f"    Type        : File")
+                lines.append(f"    Size        : {item.get('size_human', '0 B')} ({item.get('size', 0):,} bytes)")
+                lines.append(f"    Permissions : {item.get('mode', '-rw-r--r--')} (UID: {item.get('uid', 0)}, GID: {item.get('gid', 0)})")
+                if item.get("inode"):
+                    lines.append(f"    Inode       : {item['inode']}")
+                if item.get("mtime"):
+                    lines.append(f"    Modified    : {item['mtime']}")
+                matches = item.get("matches", [])
+                lines.append(f"    Matches     : {len(matches)} occurrence(s)")
+                lines.append(f"    {'-' * 80}")
+                for m in matches:
+                    lines.append(f"      Line {str(m.get('line', '')).ljust(5)}: {m.get('snippet', '')}")
+                lines.append(f"    {'-' * 80}")
+                lines.append("")
+        else:
+            results = fs.search(
+                query=q,
+                root_path=path,
+                include_exts=include_exts,
+                exclude_exts=exclude_exts,
+                type_filter=type_filter,
+                min_size=min_size,
+                max_size=max_size,
+                date_filter=date_filter,
+                case_sensitive=case_sensitive,
+                whole_word=whole_word,
+                use_regex=use_regex
+            )
+            lines.append(f"Total Matches : {len(results)} item(s) found")
+            lines.append("=" * 80)
+            lines.append("")
+
+            for idx, item in enumerate(results, 1):
+                lines.append(f"[{idx}] {item['path']}")
+                lines.append(f"    Type        : {item.get('type', 'file').capitalize()}")
+                lines.append(f"    Size        : {item.get('size_human', '0 B')} ({item.get('size', 0):,} bytes)")
+                lines.append(f"    Permissions : {item.get('mode', '-rw-r--r--')} (UID: {item.get('uid', 0)}, GID: {item.get('gid', 0)})")
+                if item.get("inode"):
+                    lines.append(f"    Inode       : {item['inode']}")
+                if item.get("mtime"):
+                    lines.append(f"    Modified    : {item['mtime']}")
+                if item.get("target"):
+                    lines.append(f"    Symlink To  : {item['target']}")
+                lines.append("")
+
+        lines.append("=" * 80)
+        lines.append(f"End of Report ({len(results)} items) - Linux SSD Explorer")
+        lines.append("=" * 80)
+
+        report_text = "\n".join(lines)
+        safe_q = re.sub(r'[^a-zA-Z0-9_-]', '_', q)[:30] or "results"
+        filename = f"search_{mode}_{safe_q}.txt"
+        encoded_filename = urllib.parse.quote(filename)
+        headers = {
+            "Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{encoded_filename}"
+        }
+        return Response(
+            content=report_text.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            headers=headers
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/search")
+def api_search(
+    q: str = Query("", description="Search query"),
+    path: str = Query("/", description="Root search path"),
+    include_exts: Optional[str] = Query(None, description="Extensions to include"),
+    exclude_exts: Optional[str] = Query(None, description="Extensions or folders to exclude"),
+    type_filter: str = Query("all", description="Item type: 'all', 'file', 'directory', 'symlink'"),
+    min_size: Optional[int] = Query(None, description="Minimum file size in bytes"),
+    max_size: Optional[int] = Query(None, description="Maximum file size in bytes"),
+    date_filter: Optional[str] = Query(None, description="Date modified filter: '24h', '7d', '30d', '1y'"),
+    case_sensitive: bool = Query(False, description="Case-sensitive matching"),
+    whole_word: bool = Query(False, description="Whole word matching"),
+    use_regex: bool = Query(False, description="Regular expression matching")
+):
+    """Search files recursively with advanced filtering."""
+    try:
+        q = _clean_param(q, "")
+        path = _clean_param(path, "/")
+        include_exts = _clean_param(include_exts, None)
+        exclude_exts = _clean_param(exclude_exts, None)
+        type_filter = _clean_param(type_filter, "all")
+        min_size = _clean_param(min_size, None)
+        max_size = _clean_param(max_size, None)
+        date_filter = _clean_param(date_filter, None)
+        case_sensitive = bool(_clean_param(case_sensitive, False))
+        whole_word = bool(_clean_param(whole_word, False))
+        use_regex = bool(_clean_param(use_regex, False))
+
+        fs = get_current_fs()
+        results = fs.search(
+            query=q,
+            root_path=path,
+            include_exts=include_exts,
+            exclude_exts=exclude_exts,
+            type_filter=type_filter,
+            min_size=min_size,
+            max_size=max_size,
+            date_filter=date_filter,
+            case_sensitive=case_sensitive,
+            whole_word=whole_word,
+            use_regex=use_regex
+        )
         return {
             "query": q,
             "count": len(results),
@@ -318,16 +538,42 @@ def api_grep(
     q: str = Query(..., description="Search query string to find inside files"),
     path: str = Query("/", description="Root search path"),
     recursive: bool = Query(False, description="Recursive directory scan"),
-    case_sensitive: bool = Query(False, description="Case-sensitive match")
+    case_sensitive: bool = Query(False, description="Case-sensitive match"),
+    whole_word: bool = Query(False, description="Whole word matching"),
+    use_regex: bool = Query(False, description="Regular expression matching"),
+    include_exts: Optional[str] = Query(None, description="Extensions to include"),
+    exclude_exts: Optional[str] = Query(None, description="Extensions or folders to exclude"),
+    min_size: Optional[int] = Query(None, description="Minimum file size in bytes"),
+    max_size: Optional[int] = Query(None, description="Maximum file size in bytes"),
+    date_filter: Optional[str] = Query(None, description="Date cutoff: '24h', '7d', '30d', '1y'")
 ):
-    """Search inside text files for a query string (grep)."""
+    """Search inside text files for a query string (grep) with advanced filters."""
     try:
+        q = _clean_param(q, "")
+        path = _clean_param(path, "/")
+        recursive = bool(_clean_param(recursive, False))
+        case_sensitive = bool(_clean_param(case_sensitive, False))
+        whole_word = bool(_clean_param(whole_word, False))
+        use_regex = bool(_clean_param(use_regex, False))
+        include_exts = _clean_param(include_exts, None)
+        exclude_exts = _clean_param(exclude_exts, None)
+        min_size = _clean_param(min_size, None)
+        max_size = _clean_param(max_size, None)
+        date_filter = _clean_param(date_filter, None)
+
         fs = get_current_fs()
         results = fs.grep_content(
             query=q,
             root_path=path,
             recursive=recursive,
-            case_sensitive=case_sensitive
+            case_sensitive=case_sensitive,
+            whole_word=whole_word,
+            use_regex=use_regex,
+            include_exts=include_exts,
+            exclude_exts=exclude_exts,
+            min_size=min_size,
+            max_size=max_size,
+            date_filter=date_filter
         )
         return {
             "query": q,
@@ -343,10 +589,31 @@ def api_grep(
 @app.get("/api/search/stream")
 async def api_search_stream(
     request: Request,
-    q: str = Query(..., description="Search query"),
-    path: str = Query("/", description="Root search path")
+    q: str = Query("", description="Search query"),
+    path: str = Query("/", description="Root search path"),
+    include_exts: Optional[str] = Query(None, description="Extensions to include"),
+    exclude_exts: Optional[str] = Query(None, description="Extensions or folders to exclude"),
+    type_filter: str = Query("all", description="Item type: 'all', 'file', 'directory', 'symlink'"),
+    min_size: Optional[int] = Query(None, description="Minimum file size in bytes"),
+    max_size: Optional[int] = Query(None, description="Maximum file size in bytes"),
+    date_filter: Optional[str] = Query(None, description="Date cutoff: '24h', '7d', '30d', '1y'"),
+    case_sensitive: bool = Query(False, description="Case-sensitive matching"),
+    whole_word: bool = Query(False, description="Whole word matching"),
+    use_regex: bool = Query(False, description="Regular expression matching")
 ):
-    """Stream filename search progress and matches using Server-Sent Events (SSE)."""
+    """Stream filename search progress and matches using Server-Sent Events (SSE) with filters."""
+    q = _clean_param(q, "")
+    path = _clean_param(path, "/")
+    include_exts = _clean_param(include_exts, None)
+    exclude_exts = _clean_param(exclude_exts, None)
+    type_filter = _clean_param(type_filter, "all")
+    min_size = _clean_param(min_size, None)
+    max_size = _clean_param(max_size, None)
+    date_filter = _clean_param(date_filter, None)
+    case_sensitive = bool(_clean_param(case_sensitive, False))
+    whole_word = bool(_clean_param(whole_word, False))
+    use_regex = bool(_clean_param(use_regex, False))
+
     fs = get_current_fs()
 
     async def event_generator():
@@ -358,7 +625,20 @@ async def api_search_stream(
         def worker():
             with fs_lock:
                 try:
-                    for event in fs.search_stream(query=q, root_path=path, stop_event=stop_event):
+                    for event in fs.search_stream(
+                        query=q,
+                        root_path=path,
+                        include_exts=include_exts,
+                        exclude_exts=exclude_exts,
+                        type_filter=type_filter,
+                        min_size=min_size,
+                        max_size=max_size,
+                        date_filter=date_filter,
+                        case_sensitive=case_sensitive,
+                        whole_word=whole_word,
+                        use_regex=use_regex,
+                        stop_event=stop_event
+                    ):
                         if stop_event.is_set():
                             break
                         asyncio.run_coroutine_threadsafe(queue.put(event), loop).result()
@@ -372,7 +652,7 @@ async def api_search_stream(
 
         try:
             while True:
-                if await request.is_disconnected():
+                if await _is_client_disconnected(request):
                     stop_event.set()
                     break
                 try:
@@ -381,7 +661,7 @@ async def api_search_stream(
                         break
                     yield f"data: {json.dumps(item)}\n\n"
                 except asyncio.TimeoutError:
-                    if await request.is_disconnected():
+                    if await _is_client_disconnected(request):
                         stop_event.set()
                         break
                     yield ": ping\n\n"
@@ -405,9 +685,28 @@ async def api_grep_stream(
     q: str = Query(..., description="Search query string to find inside files"),
     path: str = Query("/", description="Root search path"),
     recursive: bool = Query(False, description="Recursive directory scan"),
-    case_sensitive: bool = Query(False, description="Case-sensitive match")
+    case_sensitive: bool = Query(False, description="Case-sensitive match"),
+    whole_word: bool = Query(False, description="Whole word matching"),
+    use_regex: bool = Query(False, description="Regular expression matching"),
+    include_exts: Optional[str] = Query(None, description="Extensions to include"),
+    exclude_exts: Optional[str] = Query(None, description="Extensions or folders to exclude"),
+    min_size: Optional[int] = Query(None, description="Minimum file size in bytes"),
+    max_size: Optional[int] = Query(None, description="Maximum file size in bytes"),
+    date_filter: Optional[str] = Query(None, description="Date cutoff: '24h', '7d', '30d', '1y'")
 ):
-    """Stream grep search progress, scanned files count, and matches as SSE."""
+    """Stream grep search progress, scanned files count, and matches as SSE with filters."""
+    q = _clean_param(q, "")
+    path = _clean_param(path, "/")
+    recursive = bool(_clean_param(recursive, False))
+    case_sensitive = bool(_clean_param(case_sensitive, False))
+    whole_word = bool(_clean_param(whole_word, False))
+    use_regex = bool(_clean_param(use_regex, False))
+    include_exts = _clean_param(include_exts, None)
+    exclude_exts = _clean_param(exclude_exts, None)
+    min_size = _clean_param(min_size, None)
+    max_size = _clean_param(max_size, None)
+    date_filter = _clean_param(date_filter, None)
+
     fs = get_current_fs()
 
     async def event_generator():
@@ -424,8 +723,160 @@ async def api_grep_stream(
                         root_path=path,
                         recursive=recursive,
                         case_sensitive=case_sensitive,
+                        whole_word=whole_word,
+                        use_regex=use_regex,
+                        include_exts=include_exts,
+                        exclude_exts=exclude_exts,
+                        min_size=min_size,
+                        max_size=max_size,
+                        date_filter=date_filter,
                         stop_event=stop_event
                     ):
+                        if stop_event.is_set():
+                            break
+                        asyncio.run_coroutine_threadsafe(queue.put(event), loop).result()
+                except Exception as e:
+                    asyncio.run_coroutine_threadsafe(queue.put({"type": "error", "error": str(e)}), loop).result()
+                finally:
+                    asyncio.run_coroutine_threadsafe(queue.put(done_sentinel), loop).result()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        try:
+            while True:
+                if await _is_client_disconnected(request):
+                    stop_event.set()
+                    break
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=0.25)
+                    if item is done_sentinel:
+                        break
+                    yield f"data: {json.dumps(item)}\n\n"
+                except asyncio.TimeoutError:
+                    if await _is_client_disconnected(request):
+                        stop_event.set()
+                        break
+                    yield ": ping\n\n"
+        finally:
+            stop_event.set()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+# ==============================================================================
+# Saved Searches Endpoints (Save search results inside the app)
+# ==============================================================================
+
+@app.get("/api/saved-searches")
+def api_get_saved_searches():
+    """Retrieve list of saved searches stored inside the app."""
+    try:
+        return saved_searches.list_saved_searches()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/saved-searches")
+def api_create_saved_search(payload: Dict[str, Any]):
+    """Save current search query and results inside the app."""
+    try:
+        query = str(payload.get("query", "")).strip()
+        results = payload.get("results", [])
+        mode = payload.get("mode", "filename")
+        root_path = payload.get("root_path", "/")
+        vol_name = payload.get("volume_name")
+        vol_id = payload.get("volume_id")
+        name = payload.get("name")
+        filters = payload.get("filters", {})
+
+        if not results:
+            raise HTTPException(status_code=400, detail="Cannot save empty search results")
+
+        entry = saved_searches.save_search(
+            query=query,
+            results=results,
+            mode=mode,
+            root_path=root_path,
+            volume_name=vol_name,
+            volume_id=vol_id,
+            name=name,
+            filters=filters
+        )
+        return {"status": "saved", "entry": entry}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/saved-searches/{search_id}")
+def api_get_saved_search(search_id: str):
+    """Get full results of a specific saved search."""
+    item = saved_searches.get_saved_search(search_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Saved search not found")
+    return item
+
+
+@app.delete("/api/saved-searches/{search_id}")
+def api_delete_saved_search(search_id: str):
+    """Delete a specific saved search."""
+    deleted = saved_searches.delete_saved_search(search_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Saved search not found")
+    return {"status": "deleted", "id": search_id}
+
+
+@app.delete("/api/saved-searches")
+def api_clear_saved_searches():
+    """Clear all saved searches in the app."""
+    saved_searches.clear_saved_searches()
+    return {"status": "cleared"}
+
+
+# ==============================================================================
+# Disk Index & Search Acceleration Endpoints
+# ==============================================================================
+
+@app.get("/api/index/status")
+def api_index_status():
+    """Get disk scan index status and storage statistics."""
+    try:
+        fs = get_current_fs()
+        if not getattr(fs, "index", None):
+            return {"indexed": False, "stats": None}
+        return {"indexed": True, "stats": fs.index.get_stats()}
+    except Exception as e:
+        return {"indexed": False, "error": str(e)}
+
+
+@app.get("/api/index/stream")
+async def api_index_stream(
+    request: Request,
+    path: str = Query("/", description="Root path to index")
+):
+    """Stream full-disk indexing progress using Server-Sent Events (SSE)."""
+    fs = get_current_fs()
+
+    async def event_generator():
+        queue = asyncio.Queue(maxsize=100)
+        loop = asyncio.get_running_loop()
+        stop_event = threading.Event()
+        done_sentinel = object()
+
+        def worker():
+            with fs_lock:
+                try:
+                    for event in fs.index_disk_stream(root_path=path, stop_event=stop_event):
                         if stop_event.is_set():
                             break
                         asyncio.run_coroutine_threadsafe(queue.put(event), loop).result()
@@ -464,6 +915,19 @@ async def api_grep_stream(
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@app.post("/api/index/clear")
+def api_index_clear():
+    """Clear index cache for the active disk."""
+    try:
+        fs = get_current_fs()
+        if getattr(fs, "index", None):
+            fs.index.clear()
+            return {"status": "cleared", "stats": fs.index.get_stats()}
+        return {"status": "no_index"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/create-sample")

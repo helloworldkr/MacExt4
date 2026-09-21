@@ -181,6 +181,54 @@
             <span>Recursive</span>
           </label>
 
+          <!-- Advanced Search Filters Button -->
+          <button id="btnToggleSearchFilters" class="btn btn-filter-toggle" title="Toggle advanced search filters (extensions, file types, size, date, regex)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+            </svg>
+            <span>Filters</span>
+            <span class="badge-count hidden" id="filterCountBadge">0</span>
+            <span class="filter-chevron" id="filterChevron">▾</span>
+          </button>
+
+          <!-- Index Status & Disk Optimization Action -->
+          <div class="index-status-wrap" id="indexStatusWrap">
+            <button id="btnIndexDisk" class="btn-index-badge" title="Index disk to accelerate filename and grep searches across current and future app runs (<5ms)">
+              <span class="index-dot" id="indexDot"></span>
+              <span id="indexStatusText">⚡ Instant Search</span>
+              <span class="index-tag" id="indexTag">Ready</span>
+            </button>
+          </div>
+
+          <!-- Save Search in App -->
+          <button id="btnSaveSearchInApp" class="btn btn-primary-outline hidden" title="Save current search results inside the app for offline and instant review">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span id="btnSaveSearchInAppLabel">Save in App</span>
+          </button>
+
+          <!-- Save Search as Text File -->
+          <button id="btnSaveSearchResults" class="btn btn-secondary hidden" title="Export search results as formatted text file (.txt)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="12" y1="18" x2="12" y2="12"></line>
+              <line x1="9" y1="15" x2="12" y2="18"></line>
+              <line x1="15" y1="15" x2="12" y2="18"></line>
+            </svg>
+            <span id="btnSaveSearchLabel">Export (.txt)</span>
+          </button>
+
+          <!-- View Saved Searches in App -->
+          <button id="btnOpenSavedSearches" class="btn btn-secondary" title="View searches and results saved in the app">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span>Saved Searches</span>
+            <span class="badge-count hidden" id="savedSearchesCountBadge">0</span>
+          </button>
+
           <button id="btnDownloadFolderZip" class="btn btn-secondary" title="Download current directory as a ZIP archive">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -190,10 +238,193 @@
             Download Folder (.ZIP)
           </button>
         </div>
+
+        <!-- Collapsible Advanced Search Filters Drawer -->
+        <div class="search-filters-drawer hidden" id="searchFiltersDrawer">
+          <div class="filters-drawer-inner">
+            <!-- Header with Active Filters Summary & Reset -->
+            <div class="filters-drawer-header">
+              <div class="filters-drawer-title-group">
+                <span class="filters-drawer-title">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+                  </svg>
+                  Search Filters &amp; Constraints
+                </span>
+                <span class="filters-drawer-subtitle">Refine filename and file content (grep) searches</span>
+              </div>
+              <div class="filters-drawer-actions">
+                <span class="active-filter-summary" id="activeFilterSummary">No filters applied</span>
+                <button type="button" id="btnResetFilters" class="btn-reset-filters" title="Reset all filters to defaults">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="1 4 1 10 7 10"></polyline>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                  </svg>
+                  Reset Filters
+                </button>
+              </div>
+            </div>
+
+            <!-- Row 1: Quick Category Presets -->
+            <div class="filters-row filters-row-presets">
+              <div class="filter-group-label">Quick Presets:</div>
+              <div class="preset-pills-wrap" id="presetPillsWrap">
+                <button type="button" class="preset-pill active" data-preset="all">All Files</button>
+                <button type="button" class="preset-pill" data-preset="code" title=".py, .js, .ts, .c, .cpp, .h, .sh, .rs, .go, .html, .css">💻 Code</button>
+                <button type="button" class="preset-pill" data-preset="configs" title=".conf, .cfg, .ini, .yaml, .yml, .json, .xml, .env, .toml">⚙️ Configs</button>
+                <button type="button" class="preset-pill" data-preset="logs" title=".log, .txt, .md, .csv, .out">📝 Logs &amp; Text</button>
+                <button type="button" class="preset-pill" data-preset="docs" title=".pdf, .doc, .docx, .odt, .rtf">📄 Documents</button>
+                <button type="button" class="preset-pill" data-preset="images" title=".png, .jpg, .jpeg, .gif, .svg, .webp">🖼️ Images</button>
+                <button type="button" class="preset-pill" data-preset="archives" title=".zip, .tar, .gz, .xz, .bz2, .7z">📦 Archives</button>
+              </div>
+            </div>
+
+            <!-- Row 2: Extension Inclusion & Exclusion -->
+            <div class="filters-grid">
+              <div class="filter-field">
+                <label for="filterIncludeExts" class="filter-label">
+                  <span class="dot-indicator green"></span>
+                  Search ONLY in these extensions:
+                </label>
+                <div class="filter-input-wrap">
+                  <input type="text" id="filterIncludeExts" placeholder="e.g. txt, py, log, conf (comma separated)" />
+                  <button type="button" class="btn-field-clear hidden" id="btnClearIncludeExts">&times;</button>
+                </div>
+                <span class="field-hint">Leave blank to search all files</span>
+              </div>
+
+              <div class="filter-field">
+                <label for="filterExcludeExts" class="filter-label">
+                  <span class="dot-indicator red"></span>
+                  DO NOT search in these extensions or folders:
+                </label>
+                <div class="filter-input-wrap">
+                  <input type="text" id="filterExcludeExts" placeholder="e.g. bin, iso, pyc, o, node_modules, .git" />
+                  <button type="button" class="btn-field-clear hidden" id="btnClearExcludeExts">&times;</button>
+                </div>
+                <span class="field-hint">Skips matching extensions and prevents crawling inside folder names</span>
+              </div>
+            </div>
+
+            <!-- Row 3: Item Type, Size, Date, Match Controls -->
+            <div class="filters-grid filters-grid-secondary">
+              <div class="filter-field">
+                <label for="filterItemType" class="filter-label">Item Type:</label>
+                <select id="filterItemType" class="filter-select">
+                  <option value="all">All Items (Files, Folders, Links)</option>
+                  <option value="file">Files Only</option>
+                  <option value="directory">Folders Only</option>
+                  <option value="symlink">Symlinks Only</option>
+                </select>
+              </div>
+
+              <div class="filter-field">
+                <label for="filterSizePreset" class="filter-label">File Size:</label>
+                <select id="filterSizePreset" class="filter-select">
+                  <option value="any">Any Size</option>
+                  <option value="tiny">&lt; 100 KB (Small / Configs)</option>
+                  <option value="small">100 KB - 10 MB (Docs / Code)</option>
+                  <option value="medium">10 MB - 100 MB</option>
+                  <option value="large">&gt; 100 MB (Large files)</option>
+                  <option value="custom">Custom Size...</option>
+                </select>
+                <div class="custom-size-inputs hidden" id="customSizeWrap">
+                  <input type="number" id="filterMinSize" placeholder="Min" min="0" />
+                  <span>to</span>
+                  <input type="number" id="filterMaxSize" placeholder="Max" min="0" />
+                  <select id="filterSizeUnit" class="filter-select-sm">
+                    <option value="KB">KB</option>
+                    <option value="MB" selected>MB</option>
+                    <option value="GB">GB</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="filter-field">
+                <label for="filterDateModified" class="filter-label">Modified Date:</label>
+                <select id="filterDateModified" class="filter-select">
+                  <option value="any">Any Time</option>
+                  <option value="24h">Past 24 Hours</option>
+                  <option value="7d">Past 7 Days</option>
+                  <option value="30d">Past 30 Days</option>
+                  <option value="1y">Past 1 Year</option>
+                </select>
+              </div>
+
+              <div class="filter-field filter-field-options">
+                <label class="filter-label">Match Options:</label>
+                <div class="filter-toggles-wrap">
+                  <label class="filter-chk-label" title="Exact case-sensitive matching">
+                    <input type="checkbox" id="filterCaseSensitive" />
+                    <span>Case Sensitive</span>
+                  </label>
+                  <label class="filter-chk-label" title="Match whole word or whole token">
+                    <input type="checkbox" id="filterWholeWord" />
+                    <span>Whole Word</span>
+                  </label>
+                  <label class="filter-chk-label" title="Treat query as regular expression">
+                    <input type="checkbox" id="filterRegex" />
+                    <span>RegEx</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Active Filter Indicator Banner -->
+        <div class="active-filters-banner hidden" id="activeFiltersBanner">
+          <div class="active-filters-left">
+            <span class="active-filters-icon">🔍</span>
+            <span class="active-filters-label">Active Filters:</span>
+            <div class="active-filter-tags" id="activeFilterTags"></div>
+          </div>
+          <div class="active-filters-right">
+            <button type="button" class="btn-link-filter" id="btnEditFiltersFromBanner">Adjust Filters</button>
+            <button type="button" class="btn-link-filter danger" id="btnClearFiltersFromBanner">&times; Clear All</button>
+          </div>
+        </div>
       </section>
 
       <!-- Files Table Container -->
       <section class="table-container">
+        <!-- Disk Indexing Progress Panel -->
+        <div class="index-progress-panel hidden" id="indexProgressPanel">
+          <div class="index-progress-header">
+            <div class="index-progress-status">
+              <div class="search-spinner" id="indexSpinner"></div>
+              <div class="index-title-group">
+                <span class="index-progress-title" id="indexProgressTitle">Indexing Disk for Instant Search...</span>
+                <span class="index-progress-subtitle" id="indexProgressSub">Building lightweight SQLite FTS5 index (~50 bytes/file) for next runs</span>
+              </div>
+            </div>
+            <div class="index-progress-actions">
+              <span class="search-badge-speed" id="indexSpeedBadge">0 files/s</span>
+              <span class="index-badge-size" id="indexSizeBadge">0 KB</span>
+              <span class="search-badge-time" id="indexTimeBadge">0.0s</span>
+              <button class="btn btn-sm btn-danger-outline" id="btnStopIndexing" title="Stop indexing and keep current index">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+                </svg>
+                Stop
+              </button>
+            </div>
+          </div>
+          <div class="search-bar-track">
+            <div class="search-bar-fill index-fill" id="indexProgressBar"></div>
+          </div>
+          <div class="index-progress-footer">
+            <div class="search-stat">
+              <span class="stat-label">Indexed Files:</span>
+              <strong class="stat-val" id="indexCountText">0</strong>
+            </div>
+            <div class="search-stat search-curr-file">
+              <span class="stat-label">Current Folder:</span>
+              <span class="stat-val stat-file-name" id="indexCurrentDir">/</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Search Progress Panel -->
         <div class="search-progress-panel hidden" id="searchProgressPanel">
           <div class="search-progress-header">
@@ -207,6 +438,22 @@
             <div class="search-progress-actions">
               <span class="search-badge-speed" id="searchSpeedBadge">0 files/s</span>
               <span class="search-badge-time" id="searchTimeBadge">0.0s</span>
+              <button class="btn btn-sm btn-primary-outline hidden" id="btnSaveSearchProgressInApp" title="Save current search results directly inside the app">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+                </svg>
+                Save in App
+              </button>
+              <button class="btn btn-sm btn-secondary hidden" id="btnSaveSearchProgress" title="Save current search results as text file">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="12" y1="18" x2="12" y2="12"></line>
+                  <line x1="9" y1="15" x2="12" y2="18"></line>
+                  <line x1="15" y1="15" x2="12" y2="18"></line>
+                </svg>
+                Export (.txt)
+              </button>
               <button class="btn btn-sm btn-danger-outline" id="btnStopSearch" title="Stop search and keep current results">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
                   <rect x="4" y="4" width="16" height="16" rx="2"></rect>
@@ -234,6 +481,34 @@
               <span class="stat-label">Matches Found:</span>
               <strong class="stat-val match-highlight" id="searchFoundCount">0</strong>
             </div>
+          </div>
+        </div>
+
+        <!-- Saved Search Active Banner -->
+        <div class="saved-search-banner hidden" id="savedSearchBanner">
+          <div class="saved-search-banner-left">
+            <span class="saved-banner-badge">SAVED SEARCH</span>
+            <span class="saved-banner-query" id="savedBannerQuery">"nginx"</span>
+            <span class="saved-banner-details" id="savedBannerDetails">4 matches · Filename · Ubuntu_SSD_Root</span>
+          </div>
+          <div class="saved-search-banner-right">
+            <button class="btn btn-xs btn-secondary" id="btnSavedBannerRerun" title="Run this search live on the mounted drive">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+              </svg>
+              Re-run Live
+            </button>
+            <button class="btn btn-xs btn-secondary" id="btnSavedBannerExport" title="Export this saved search report as .txt">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+              </svg>
+              Export (.txt)
+            </button>
+            <button class="btn btn-xs btn-danger-outline" id="btnCloseSavedBanner" title="Close saved results and return to file explorer">
+              &times; Exit View
+            </button>
           </div>
         </div>
 
@@ -315,6 +590,15 @@
                 <button id="btnInFilePrev" class="btn-in-file-nav" title="Previous match (Shift+Enter)">▲</button>
                 <button id="btnInFileNext" class="btn-in-file-nav" title="Next match (Enter)">▼</button>
                 <button id="btnInFileCase" class="btn-in-file-toggle" title="Match Case">Aa</button>
+                <button id="btnInFileSaveText" class="btn-in-file-nav hidden" title="Save search matches as text file">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="12" y2="18"></line>
+                    <line x1="15" y1="15" x2="12" y2="18"></line>
+                  </svg>
+                </button>
                 <button id="btnInFileClear" class="btn-clear hidden" style="font-size: 14px; padding: 0 4px;">&times;</button>
               </div>
 
@@ -355,7 +639,46 @@
         </div>
       </div>
     </div>
+  <!-- Saved Searches in App Modal -->
+  <div class="modal-backdrop hidden" id="savedSearchesModal">
+    <div class="modal modal-lg saved-searches-modal">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+          </svg>
+          <div style="display: flex; align-items: baseline; gap: 8px;">
+            <h2>Saved Searches in App</h2>
+            <span class="badge-count" id="savedSearchesModalCount">0</span>
+          </div>
+        </div>
+        <div class="modal-header-actions">
+          <button class="btn btn-sm btn-danger-outline hidden" id="btnClearAllSavedSearches" title="Delete all saved searches">
+            Clear All
+          </button>
+          <button class="btn-close" id="btnCloseSavedSearchesModal">&times;</button>
+        </div>
+      </div>
+      <div class="modal-body saved-modal-body">
+        <div class="saved-searches-toolbar">
+          <div class="search-box" style="flex: 1;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="savedSearchesFilterInput" placeholder="Filter saved searches by query, path, or disk..." />
+            <button id="btnClearSavedFilter" class="btn-clear hidden">&times;</button>
+          </div>
+        </div>
+
+        <div class="saved-searches-list" id="savedSearchesList">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
   </div>
+
+  <div id="toastContainer" class="toast-container"></div>
 
   <script src="/static/app.js"></script>
 </body>

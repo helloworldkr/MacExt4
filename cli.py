@@ -105,6 +105,86 @@ def cmd_extract(args):
         print(f"\nExtraction complete to: {args.dest}")
 
 
+def cmd_search(args):
+    with LinuxFileSystem(args.device, offset=args.offset) as fs:
+        results = fs.search(
+            args.query,
+            root_path=args.path,
+            include_exts=args.include_exts,
+            exclude_exts=args.exclude_exts,
+            type_filter=args.type_filter,
+            min_size=args.min_size,
+            max_size=args.max_size,
+            date_filter=args.date_filter,
+            case_sensitive=args.case_sensitive
+        )
+        print(f"\nSearch results for '{args.query}' in '{args.path}': ({len(results)} matches)")
+        print("=" * 80)
+        lines = []
+        for r in results:
+            line = f"{r['mode']:<12} {r['size_human']:>10}  {r.get('mtime', ''):<20} {r['path']}"
+            print(line)
+            lines.append(line)
+        print("=" * 80)
+        if args.save:
+            with open(args.save, "w", encoding="utf-8") as f:
+                f.write(f"Search Query : {args.query}\n")
+                f.write(f"Search Scope : {args.path}\n")
+                f.write(f"Total Matches: {len(results)}\n\n")
+                f.write("\n".join(lines) + "\n")
+            print(f"Results saved as text to: {args.save}")
+
+
+def cmd_grep(args):
+    with LinuxFileSystem(args.device, offset=args.offset) as fs:
+        results = fs.grep_content(
+            args.query,
+            root_path=args.path,
+            recursive=args.recursive,
+            case_sensitive=args.case_sensitive,
+            include_exts=args.include_exts,
+            exclude_exts=args.exclude_exts,
+            min_size=args.min_size,
+            max_size=args.max_size,
+            date_filter=args.date_filter
+        )
+        total_occurrences = sum(len(r.get("matches", [])) for r in results)
+        print(f"\nGrep results for '{args.query}' in '{args.path}': ({len(results)} files, {total_occurrences} occurrences)")
+        print("=" * 80)
+        out_lines = []
+        for r in results:
+            header = f"\nFile: {r['path']} ({len(r['matches'])} matches, {r['size_human']})"
+            print(header)
+            out_lines.append(header)
+            for m in r["matches"]:
+                m_str = f"  Line {m['line']}: {m['snippet']}"
+                print(m_str)
+                out_lines.append(m_str)
+        print("=" * 80)
+        if args.save:
+            with open(args.save, "w", encoding="utf-8") as f:
+                f.write(f"Grep Query   : {args.query}\n")
+                f.write(f"Search Scope : {args.path}\n")
+                f.write(f"Matches      : {len(results)} files with {total_occurrences} occurrences\n\n")
+                f.write("\n".join(out_lines) + "\n")
+            print(f"Results saved as text to: {args.save}")
+
+
+def cmd_index(args):
+    with LinuxFileSystem(args.device, offset=args.offset) as fs:
+        print(f"\nIndexing disk '{args.device}' for high-speed searches...")
+        for ev in fs.index_disk_stream(root_path=args.path):
+            if ev.get("type") == "progress":
+                print(f"\r  Scanned: {ev['scanned']:,} files | Speed: {ev['speed']:.0f} files/s | Size: {ev['db_size']} | {ev.get('current_file', '')[:30]}", end="", flush=True)
+            elif ev.get("type") == "done":
+                print(f"\n✓ Index complete: {ev['scanned']:,} files indexed in {ev['elapsed']:.2f}s ({ev['speed']:.0f} files/s)")
+                stats = ev.get("stats", {})
+                print(f"  Index database: {stats.get('db_path')} ({stats.get('size_human', '')})")
+                print("  Subsequent filename and grep searches will now execute in <5ms without re-scanning disk.")
+            elif ev.get("type") == "error":
+                print(f"\nError indexing disk: {ev.get('error')}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Linux SSD / Hard Disk Reader for macOS")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -112,6 +192,7 @@ def main():
     # disks
     p_disks = subparsers.add_parser("disks", help="Scan and list all detected storage devices and partitions")
     p_disks.set_defaults(func=cmd_disks)
+
 
     # info
     p_info = subparsers.add_parser("info", help="Show filesystem superblock details")
@@ -140,6 +221,45 @@ def main():
     p_extract.add_argument("dest", help="Destination folder on macOS")
     p_extract.add_argument("--offset", type=int, default=0, help="Partition byte offset (default 0)")
     p_extract.set_defaults(func=cmd_extract)
+
+    # search
+    p_search = subparsers.add_parser("search", help="Search files by name")
+    p_search.add_argument("device", help="Path to disk device or image file")
+    p_search.add_argument("query", help="Search query string")
+    p_search.add_argument("--path", default="/", help="Root path to search from (default /)")
+    p_search.add_argument("--include-ext", dest="include_exts", help="Comma-separated extensions to include (e.g. 'txt,py,conf')")
+    p_search.add_argument("--exclude-ext", dest="exclude_exts", help="Comma-separated extensions or folder names to exclude (e.g. 'iso,bin,node_modules')")
+    p_search.add_argument("--type", dest="type_filter", default="all", choices=["all", "file", "directory", "symlink"], help="Filter by item type")
+    p_search.add_argument("--min-size", type=int, help="Minimum file size in bytes")
+    p_search.add_argument("--max-size", type=int, help="Maximum file size in bytes")
+    p_search.add_argument("--date", dest="date_filter", help="Date cutoff: '24h', '7d', '30d', '1y' or ISO date")
+    p_search.add_argument("-s", "--case-sensitive", action="store_true", default=False, help="Case-sensitive name match")
+    p_search.add_argument("--save", help="Save search results to text file path")
+    p_search.add_argument("--offset", type=int, default=0, help="Partition byte offset (default 0)")
+    p_search.set_defaults(func=cmd_search)
+
+    # grep
+    p_grep = subparsers.add_parser("grep", help="Search inside text files (grep)")
+    p_grep.add_argument("device", help="Path to disk device or image file")
+    p_grep.add_argument("query", help="Text to search inside files")
+    p_grep.add_argument("--path", default="/", help="Root path to search from (default /)")
+    p_grep.add_argument("-r", "--recursive", action="store_true", help="Recursive search across all subdirectories")
+    p_grep.add_argument("-i", "--ignore-case", dest="case_sensitive", action="store_false", default=True, help="Case-insensitive search")
+    p_grep.add_argument("--include-ext", dest="include_exts", help="Comma-separated extensions to include (e.g. 'txt,py,conf')")
+    p_grep.add_argument("--exclude-ext", dest="exclude_exts", help="Comma-separated extensions or folder names to exclude (e.g. 'iso,bin,node_modules')")
+    p_grep.add_argument("--min-size", type=int, help="Minimum file size in bytes")
+    p_grep.add_argument("--max-size", type=int, help="Maximum file size in bytes")
+    p_grep.add_argument("--date", dest="date_filter", help="Date cutoff: '24h', '7d', '30d', '1y' or ISO date")
+    p_grep.add_argument("--save", help="Save search results to text file path")
+    p_grep.add_argument("--offset", type=int, default=0, help="Partition byte offset (default 0)")
+    p_grep.set_defaults(func=cmd_grep)
+
+    # index
+    p_index = subparsers.add_parser("index", help="Index disk metadata to speed up subsequent searches")
+    p_index.add_argument("device", help="Path to disk device or image file")
+    p_index.add_argument("--path", default="/", help="Root path to index (default /)")
+    p_index.add_argument("--offset", type=int, default=0, help="Partition byte offset (default 0)")
+    p_index.set_defaults(func=cmd_index)
 
     # create-demo
     def cmd_create_demo(args):

@@ -28,3 +28,6 @@ dist/
 .idea/
 .vscode/
 *.swp
+
+# Local app data & caches
+.app_data/

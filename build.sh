@@ -15,7 +15,8 @@ echo "============================================================"
 killall LinuxSSDReader 2>/dev/null || true
 
 # Run PyInstaller
-"./.venv/bin/python" -m PyInstaller --clean --noconfirm "LinuxSSDReader.spec"
+export PYINSTALLER_CONFIG_DIR="$DIR/build/pyinstaller_config"
+"./.venv/bin/python" -m PyInstaller --clean --noconfirm --distpath "$DIR/dist" --workpath "$DIR/build" "LinuxSSDReader.spec"
 
 echo "============================================================"
 echo " 2. Installing to /Applications..."
